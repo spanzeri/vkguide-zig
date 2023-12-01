@@ -6,7 +6,6 @@ const check_vk = vki.check_vk;
 
 const log = std.log.scoped(.vulkan_engine);
 
-
 const Self = @This();
 
 const window_extent = c.VkExtent2D{ .width = 1600, .height = 900 };
@@ -32,8 +31,21 @@ device: c.VkDevice = VK_NULL_HANDLE,
 surface: c.VkSurfaceKHR = VK_NULL_HANDLE,
 
 swapchain: c.VkSwapchainKHR = VK_NULL_HANDLE,
+swapchain_format: c.VkFormat = undefined,
+swapchain_extent: c.VkExtent2D = undefined,
 swapchain_images: []c.VkImage = undefined,
 swapchain_image_views: []c.VkImageView = undefined,
+
+graphics_queue: c.VkQueue = VK_NULL_HANDLE,
+graphics_queue_family: u32 = undefined,
+present_queue: c.VkQueue = VK_NULL_HANDLE,
+present_queue_family: u32 = undefined,
+
+command_pool: c.VkCommandPool = VK_NULL_HANDLE,
+main_command_buffer: c.VkCommandBuffer = VK_NULL_HANDLE,
+
+render_pass: c.VkRenderPass = VK_NULL_HANDLE,
+framebuffers: []c.VkFramebuffer = undefined,
 
 pub fn init(a: std.mem.Allocator) Self {
     check_sdl(c.SDL_Init(c.SDL_INIT_VIDEO));
@@ -47,6 +59,26 @@ pub fn init(a: std.mem.Allocator) Self {
 
     _ = c.SDL_ShowWindow(window);
 
+    var engine = Self{
+        .window = window,
+        .allocator = a,
+    };
+
+    engine.init_instance();
+
+    // Create the window surface
+    check_sdl_bool(c.SDL_Vulkan_CreateSurface(window, engine.instance, &engine.surface));
+
+    engine.init_device();
+    engine.init_swapchain();
+    engine.init_commands();
+    engine.init_default_renderpass();
+    engine.init_framebuffers();
+
+    return engine;
+}
+
+fn init_instance(self: *Self) void {
     var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -57,7 +89,7 @@ pub fn init(a: std.mem.Allocator) Self {
     check_sdl_bool(c.SDL_Vulkan_GetInstanceExtensions(&sdl_required_extension_count, sdl_required_extensions.ptr));
 
     // Instance creation and optional debug utilities
-    const init_instance = vki.create_instance(std.heap.page_allocator, .{
+    const instance = vki.create_instance(std.heap.page_allocator, .{
         .application_name = "VkGuide",
         .application_version = c.VK_MAKE_VERSION(0, 1, 0),
         .engine_name = "VkGuide",
@@ -70,68 +102,161 @@ pub fn init(a: std.mem.Allocator) Self {
         unreachable;
     };
 
-    // Create the window surface
-    var surface: c.VkSurfaceKHR = undefined;
-    check_sdl_bool(c.SDL_Vulkan_CreateSurface(window, init_instance.handle, &surface));
+    self.instance = instance.handle;
+    self.debug_messenger = instance.debug_messenger;
+}
 
+fn init_device(self: *Self) void {
     // Physical device selection
     const required_device_extensions: []const [*c]const u8 = &.{
         "VK_KHR_swapchain",
     };
-    const init_physical_device = vki.select_physical_device(std.heap.page_allocator, init_instance.handle, .{
+    const physical_device = vki.select_physical_device(std.heap.page_allocator, self.instance, .{
         .min_api_version = c.VK_MAKE_VERSION(1, 1, 0),
         .required_extensions = required_device_extensions,
-        .surface = surface,
+        .surface = self.surface,
         .criteria = .PreferDiscrete,
     }) catch |err| {
         log.err("Failed to select physical device with error: {s}", .{ @errorName(err) });
         unreachable;
     };
 
+    self.physical_device = physical_device.handle;
+    self.graphics_queue_family = physical_device.graphics_queue_family;
+    self.present_queue_family = physical_device.present_queue_family;
+
     // Create a logical device
-    const init_device = vki.create_logical_device(a, .{
-        .physical_device = init_physical_device,
+    const device = vki.create_logical_device(self.allocator, .{
+        .physical_device = physical_device,
         .features = std.mem.zeroInit(c.VkPhysicalDeviceFeatures, .{}),
         .alloc_cb = vk_alloc_cbs
-    }) catch {
-        log.err("Failed to create logical device", .{});
-        unreachable;
-    };
+    }) catch @panic("Failed to create logical device");
 
+    self.device = device.handle;
+    self.graphics_queue = device.graphics_queue;
+    self.present_queue = device.present_queue;
+}
+
+fn init_swapchain(self: *Self) void {
     var win_width: c_int = undefined;
     var win_height: c_int = undefined;
-    check_sdl(c.SDL_GetWindowSize(window, &win_width, &win_height));
+    check_sdl(c.SDL_GetWindowSize(self.window, &win_width, &win_height));
 
     // Create a swapchain
-    const init_swapchain = vki.create_swapchain(a, .{
-        .physical_device = init_physical_device,
-        .device = init_device,
-        .surface = surface,
+    const swapchain = vki.create_swapchain(self.allocator, .{
+        .physical_device = self.physical_device,
+        .graphics_queue_family = self.graphics_queue_family,
+        .present_queue_family = self.graphics_queue_family,
+        .device = self.device,
+        .surface = self.surface,
         .old_swapchain = null ,
         .vsync = true,
         .window_width = @intCast(win_width),
         .window_height = @intCast(win_height),
         .alloc_cb = vk_alloc_cbs,
-    }) catch {
-        log.err("Failed to create swapchain", .{});
-        unreachable;
-    };
+    }) catch @panic("Failed to create swapchain");
 
-    return .{
-        .window = window,
-        .allocator = a,
-        .instance = init_instance.handle,
-        .debug_messenger = init_instance.debug_messenger,
-        .physical_device = init_physical_device.handle,
-        .device = init_device.handle,
-        .surface = surface,
-        .swapchain = init_swapchain.handle,
-        .swapchain_images = init_swapchain.images,
-        .swapchain_image_views = init_swapchain.image_views,
-    };
+    self.swapchain = swapchain.handle;
+    self.swapchain_format = swapchain.format;
+    self.swapchain_extent = swapchain.extent;
+    self.swapchain_images = swapchain.images;
+    self.swapchain_image_views = swapchain.image_views;
+
+    log.info("Created swapchain", .{});
+}
+
+fn init_commands(self: *Self) void {
+    // Create a command pool
+    const command_pool_ci = std.mem.zeroInit(c.VkCommandPoolCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+        .queueFamilyIndex = self.graphics_queue_family,
+    });
+
+    check_vk(c.vkCreateCommandPool(self.device, &command_pool_ci, vk_alloc_cbs, &self.command_pool))
+        catch log.err("Failed to create command pool", .{});
+
+    // Allocate a command buffer from the command pool
+    const command_buffer_ai = std.mem.zeroInit(c.VkCommandBufferAllocateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = self.command_pool,
+        .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    });
+
+    check_vk(c.vkAllocateCommandBuffers(self.device, &command_buffer_ai, &self.main_command_buffer))
+        catch @panic("Failed to allocate command buffer");
+
+    log.info("Created command pool and command buffer", .{});
+}
+
+fn init_default_renderpass(self: *Self) void {
+    const color_attachment = std.mem.zeroInit(c.VkAttachmentDescription, .{
+        .format = self.swapchain_format,
+        .samples = c.VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+    });
+
+    const color_attachment_ref = std.mem.zeroInit(c.VkAttachmentReference, .{
+        .attachment = 0,
+        .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    });
+
+    const subpass = std.mem.zeroInit(c.VkSubpassDescription, .{
+        .pipelineBindPoint = c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &color_attachment_ref,
+    });
+
+    const render_pass_create_info = std.mem.zeroInit(c.VkRenderPassCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .attachmentCount = 1,
+        .pAttachments = &color_attachment,
+        .subpassCount = 1,
+        .pSubpasses = &subpass,
+    });
+
+    check_vk(c.vkCreateRenderPass(self.device, &render_pass_create_info, vk_alloc_cbs, &self.render_pass))
+        catch @panic("Failed to create render pass");
+    log.info("Created render pass", .{});
+}
+
+fn init_framebuffers(self: *Self) void {
+    var framebuffer_ci = std.mem.zeroInit(c.VkFramebufferCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+        .renderPass = self.render_pass,
+        .attachmentCount = 1,
+        .width = self.swapchain_extent.width,
+        .height = self.swapchain_extent.height,
+        .layers = 1,
+    });
+
+    self.framebuffers = self.allocator.alloc(c.VkFramebuffer, self.swapchain_image_views.len) catch @panic("Out of memory");
+
+    for (self.swapchain_image_views, self.framebuffers) |view, *framebuffer| {
+        framebuffer_ci.pAttachments = &view;
+        check_vk(c.vkCreateFramebuffer(self.device, &framebuffer_ci, vk_alloc_cbs, framebuffer))
+            catch @panic("Failed to create framebuffer");
+    }
+
+    log.info("Created {} framebuffers", .{ self.framebuffers.len });
 }
 
 pub fn cleanup(self: *Self) void {
+    for (self.framebuffers) |framebuffer| {
+        c.vkDestroyFramebuffer(self.device, framebuffer, vk_alloc_cbs);
+    }
+    self.allocator.free(self.framebuffers);
+
+    c.vkDestroyRenderPass(self.device, self.render_pass, vk_alloc_cbs);
+
+    c.vkDestroyCommandPool(self.device, self.command_pool, vk_alloc_cbs);
+
     c.vkDestroySwapchainKHR(self.device, self.swapchain, vk_alloc_cbs);
     for (self.swapchain_image_views) |view| {
         c.vkDestroyImageView(self.device, view, vk_alloc_cbs);

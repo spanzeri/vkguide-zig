@@ -159,10 +159,10 @@ pub const PhysicalDevice = struct {
     /// The selected physical device properties.
     props: c.VkPhysicalDeviceProperties = undefined,
     /// Queue family indices.
-    graphics_queue_family_index: u32 = undefined,
-    present_queue_family_index: u32 = undefined,
-    compute_queue_family_index: u32 = undefined,
-    transfer_queue_family_index: u32 = undefined,
+    graphics_queue_family: u32 = undefined,
+    present_queue_family: u32 = undefined,
+    compute_queue_family: u32 = undefined,
+    transfer_queue_family: u32 = undefined,
 
     const INVALID_QUEUE_FAMILY_INDEX = std.math.maxInt(u32);
 };
@@ -255,10 +255,10 @@ pub fn create_logical_device(
     const queue_priorities: f32 = 1.0;
 
     var queue_family_set = std.AutoArrayHashMapUnmanaged(u32, void){};
-    try queue_family_set.put(arena, opts.physical_device.graphics_queue_family_index, {});
-    try queue_family_set.put(arena, opts.physical_device.present_queue_family_index, {});
-    try queue_family_set.put(arena, opts.physical_device.compute_queue_family_index, {});
-    try queue_family_set.put(arena, opts.physical_device.transfer_queue_family_index, {});
+    try queue_family_set.put(arena, opts.physical_device.graphics_queue_family, {});
+    try queue_family_set.put(arena, opts.physical_device.present_queue_family, {});
+    try queue_family_set.put(arena, opts.physical_device.compute_queue_family, {});
+    try queue_family_set.put(arena, opts.physical_device.transfer_queue_family, {});
 
     var qfi_iter = queue_family_set.iterator();
     try queue_create_infos.ensureTotalCapacity(arena, queue_family_set.count());
@@ -290,13 +290,13 @@ pub fn create_logical_device(
     try check_vk(c.vkCreateDevice(opts.physical_device.handle, &device_info, opts.alloc_cb, &device));
 
     var graphics_queue: c.VkQueue = undefined;
-    c.vkGetDeviceQueue(device, opts.physical_device.graphics_queue_family_index, 0, &graphics_queue);
+    c.vkGetDeviceQueue(device, opts.physical_device.graphics_queue_family, 0, &graphics_queue);
     var present_queue: c.VkQueue = undefined;
-    c.vkGetDeviceQueue(device, opts.physical_device.present_queue_family_index, 0, &present_queue);
+    c.vkGetDeviceQueue(device, opts.physical_device.present_queue_family, 0, &present_queue);
     var compute_queue: c.VkQueue = undefined;
-    c.vkGetDeviceQueue(device, opts.physical_device.compute_queue_family_index, 0, &compute_queue);
+    c.vkGetDeviceQueue(device, opts.physical_device.compute_queue_family, 0, &compute_queue);
     var transfer_queue: c.VkQueue = undefined;
-    c.vkGetDeviceQueue(device, opts.physical_device.transfer_queue_family_index, 0, &transfer_queue);
+    c.vkGetDeviceQueue(device, opts.physical_device.transfer_queue_family, 0, &transfer_queue);
 
     return .{
         .handle = device,
@@ -309,8 +309,10 @@ pub fn create_logical_device(
 
 /// Options for creating a swapchain.
 pub const SwapchainCreateOpts = struct {
-    physical_device: PhysicalDevice,
-    device: Device,
+    physical_device: c.VkPhysicalDevice,
+    graphics_queue_family: u32,
+    present_queue_family: u32,
+    device: c.VkDevice,
     surface: c.VkSurfaceKHR,
     old_swapchain: c.VkSwapchainKHR = null,
     vsync: bool = false,
@@ -361,10 +363,10 @@ pub fn create_swapchain(a: std.mem.Allocator, opts: SwapchainCreateOpts) !Swapch
         .oldSwapchain = opts.old_swapchain,
     });
 
-    if (opts.physical_device.graphics_queue_family_index != opts.physical_device.present_queue_family_index) {
+    if (opts.graphics_queue_family != opts.present_queue_family) {
         const queue_family_indices: []const u32 = &.{
-            opts.physical_device.graphics_queue_family_index,
-            opts.physical_device.present_queue_family_index,
+            opts.graphics_queue_family,
+            opts.present_queue_family,
         };
         swapchain_info.imageSharingMode = c.VK_SHARING_MODE_CONCURRENT;
         swapchain_info.queueFamilyIndexCount = 2;
@@ -374,16 +376,16 @@ pub fn create_swapchain(a: std.mem.Allocator, opts: SwapchainCreateOpts) !Swapch
     }
 
     var swapchain: c.VkSwapchainKHR = undefined;
-    try check_vk(c.vkCreateSwapchainKHR(opts.device.handle, &swapchain_info, opts.alloc_cb, &swapchain));
-    errdefer c.vkDestroySwapchainKHR(opts.device.handle, swapchain, opts.alloc_cb);
+    try check_vk(c.vkCreateSwapchainKHR(opts.device, &swapchain_info, opts.alloc_cb, &swapchain));
+    errdefer c.vkDestroySwapchainKHR(opts.device, swapchain, opts.alloc_cb);
     log.info("Created vulkan swapchain.", .{});
 
     // Try and fetch the images from the swpachain.
     var swapchain_image_count: u32 = undefined;
-    try check_vk(c.vkGetSwapchainImagesKHR(opts.device.handle, swapchain, &swapchain_image_count, null));
+    try check_vk(c.vkGetSwapchainImagesKHR(opts.device, swapchain, &swapchain_image_count, null));
     var swapchain_images = try a.alloc(c.VkImage, swapchain_image_count);
     errdefer a.free(swapchain_images);
-    try check_vk(c.vkGetSwapchainImagesKHR(opts.device.handle, swapchain, &swapchain_image_count, swapchain_images.ptr));
+    try check_vk(c.vkGetSwapchainImagesKHR(opts.device, swapchain, &swapchain_image_count, swapchain_images.ptr));
 
     // Create image views for the swapchain images.
     var swapchain_image_views = try a.alloc(c.VkImageView, swapchain_image_count);
@@ -466,10 +468,10 @@ fn make_physical_device(
     var props = std.mem.zeroInit(c.VkPhysicalDeviceProperties, .{});
     c.vkGetPhysicalDeviceProperties(device, &props);
 
-    var graphics_queue_family_index: u32 = PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX;
-    var present_queue_family_index: u32 = PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX;
-    var compute_queue_family_index: u32 = PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX;
-    var transfer_queue_family_index: u32 = PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX;
+    var graphics_queue_family: u32 = PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX;
+    var present_queue_family: u32 = PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX;
+    var compute_queue_family: u32 = PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX;
+    var transfer_queue_family: u32 = PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX;
 
     var queue_family_count: u32 = undefined;
     c.vkGetPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, null);
@@ -480,35 +482,35 @@ fn make_physical_device(
     for (queue_families, 0..) |queue_family, i| {
         const index: u32 = @intCast(i);
 
-        if (graphics_queue_family_index == PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX and
+        if (graphics_queue_family == PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX and
             queue_family.queueFlags & c.VK_QUEUE_GRAPHICS_BIT != 0)
         {
-            graphics_queue_family_index = index;
+            graphics_queue_family= index;
         }
 
-        if (present_queue_family_index == PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX) {
+        if (present_queue_family == PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX) {
             var present_support: c.VkBool32 = undefined;
             try check_vk(c.vkGetPhysicalDeviceSurfaceSupportKHR(device, index, surface, &present_support));
             if (present_support == c.VK_TRUE) {
-                present_queue_family_index = index;
+                present_queue_family = index;
             }
         }
 
-        if (compute_queue_family_index == PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX and
+        if (compute_queue_family == PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX and
             queue_family.queueFlags & c.VK_QUEUE_COMPUTE_BIT != 0)
         {
-            compute_queue_family_index = index;
+            compute_queue_family = index;
         }
 
-        if (transfer_queue_family_index == PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX and
+        if (transfer_queue_family == PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX and
             queue_family.queueFlags & c.VK_QUEUE_TRANSFER_BIT != 0) {
-            transfer_queue_family_index = index;
+            transfer_queue_family = index;
         }
 
-        if (graphics_queue_family_index != PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX and
-            present_queue_family_index != PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX and
-            compute_queue_family_index != PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX and
-            transfer_queue_family_index != PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX) {
+        if (graphics_queue_family != PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX and
+            present_queue_family != PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX and
+            compute_queue_family != PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX and
+            transfer_queue_family != PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX) {
             break;
         }
     }
@@ -516,10 +518,10 @@ fn make_physical_device(
     return .{
         .handle = device,
         .props = props,
-        .graphics_queue_family_index = graphics_queue_family_index,
-        .present_queue_family_index = present_queue_family_index,
-        .compute_queue_family_index = compute_queue_family_index,
-        .transfer_queue_family_index = transfer_queue_family_index,
+        .graphics_queue_family = graphics_queue_family,
+        .present_queue_family = present_queue_family,
+        .compute_queue_family = compute_queue_family,
+        .transfer_queue_family = transfer_queue_family,
     };
 }
 
@@ -528,10 +530,10 @@ fn is_physical_device_suitable(a: std.mem.Allocator, device: PhysicalDevice, opt
         return false;
     }
 
-    if (device.graphics_queue_family_index == PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX or
-        device.present_queue_family_index == PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX or
-        device.compute_queue_family_index == PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX or
-        device.transfer_queue_family_index == PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX) {
+    if (device.graphics_queue_family == PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX or
+        device.present_queue_family == PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX or
+        device.compute_queue_family == PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX or
+        device.transfer_queue_family == PhysicalDevice.INVALID_QUEUE_FAMILY_INDEX) {
         return false;
     }
 
@@ -539,7 +541,7 @@ fn is_physical_device_suitable(a: std.mem.Allocator, device: PhysicalDevice, opt
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const swapchain_support = try SwapchainSupportInfo.init(arena, device, opts.surface);
+    const swapchain_support = try SwapchainSupportInfo.init(arena, device.handle, opts.surface);
     defer swapchain_support.deinit(arena);
     if (swapchain_support.formats.len == 0 or swapchain_support.present_modes.len == 0) {
         return false;
@@ -569,19 +571,19 @@ const SwapchainSupportInfo = struct {
     formats: []c.VkSurfaceFormatKHR = &.{},
     present_modes: []c.VkPresentModeKHR = &.{},
 
-    fn init(a: std.mem.Allocator, device: PhysicalDevice, surface: c.VkSurfaceKHR) !SwapchainSupportInfo {
+    fn init(a: std.mem.Allocator, device: c.VkPhysicalDevice, surface: c.VkSurfaceKHR) !SwapchainSupportInfo {
         var capabilities: c.VkSurfaceCapabilitiesKHR = undefined;
-        try check_vk(c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device.handle, surface, &capabilities));
+        try check_vk(c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(device, surface, &capabilities));
 
         var format_count: u32 = undefined;
-        try check_vk(c.vkGetPhysicalDeviceSurfaceFormatsKHR(device.handle, surface, &format_count, null));
+        try check_vk(c.vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &format_count, null));
         var formats = try a.alloc(c.VkSurfaceFormatKHR, format_count);
-        try check_vk(c.vkGetPhysicalDeviceSurfaceFormatsKHR(device.handle, surface, &format_count, formats.ptr));
+        try check_vk(c.vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &format_count, formats.ptr));
 
         var present_mode_count: u32 = undefined;
-        try check_vk(c.vkGetPhysicalDeviceSurfacePresentModesKHR(device.handle, surface, &present_mode_count, null));
+        try check_vk(c.vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &present_mode_count, null));
         var present_modes = try a.alloc(c.VkPresentModeKHR, present_mode_count);
-        try check_vk(c.vkGetPhysicalDeviceSurfacePresentModesKHR(device.handle, surface, &present_mode_count, present_modes.ptr));
+        try check_vk(c.vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &present_mode_count, present_modes.ptr));
 
         return .{
             .capabilities = capabilities,
@@ -597,7 +599,7 @@ const SwapchainSupportInfo = struct {
 };
 
 fn create_image_view(
-    device: Device,
+    device: c.VkDevice,
     image: c.VkImage,
     format: c.VkFormat,
     aspect_flags: c.VkImageAspectFlags,
@@ -624,7 +626,7 @@ fn create_image_view(
     });
 
     var image_view: c.VkImageView = undefined;
-    try check_vk(c.vkCreateImageView(device.handle, &view_info, alloc_cb, &image_view));
+    try check_vk(c.vkCreateImageView(device, &view_info, alloc_cb, &image_view));
     return image_view;
 }
 
@@ -750,3 +752,4 @@ pub fn check_vk(result: c.VkResult) !void {
         else => error.vk_errror_unknown,
     };
 }
+
