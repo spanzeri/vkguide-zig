@@ -51,6 +51,9 @@ present_semaphore: c.VkSemaphore = VK_NULL_HANDLE,
 render_semaphore: c.VkSemaphore = VK_NULL_HANDLE,
 render_fence: c.VkFence = VK_NULL_HANDLE,
 
+triangle_pipeline_layout: c.VkPipelineLayout = VK_NULL_HANDLE,
+triangle_pipeline: c.VkPipeline = VK_NULL_HANDLE,
+
 pub fn init(a: std.mem.Allocator) Self {
     check_sdl(c.SDL_Init(c.SDL_INIT_VIDEO));
 
@@ -79,6 +82,7 @@ pub fn init(a: std.mem.Allocator) Self {
     engine.init_default_renderpass();
     engine.init_framebuffers();
     engine.init_sync_structures();
+    engine.init_pipelines();
 
     return engine;
 }
@@ -273,9 +277,185 @@ fn init_sync_structures(self: *Self) void {
     log.info("Created sync structures", .{});
 }
 
+const PipelineBuilder = struct {
+    shader_stages: []const c.VkPipelineShaderStageCreateInfo,
+    vertex_input_state: c.VkPipelineVertexInputStateCreateInfo,
+    input_assembly_state: c.VkPipelineInputAssemblyStateCreateInfo,
+    viewport: c.VkViewport,
+    scissor: c.VkRect2D,
+    rasterization_state: c.VkPipelineRasterizationStateCreateInfo,
+    color_blend_attachment_state: c.VkPipelineColorBlendAttachmentState,
+    multisample_state: c.VkPipelineMultisampleStateCreateInfo,
+    pipeline_layout: c.VkPipelineLayout,
+
+    fn build(self: PipelineBuilder, device: c.VkDevice, render_pass: c.VkRenderPass) c.VkPipeline {
+        const viewport_state = std.mem.zeroInit(c.VkPipelineViewportStateCreateInfo, .{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+            .viewportCount = 1,
+            .pViewports = &self.viewport,
+            .scissorCount = 1,
+            .pScissors = &self.scissor,
+        });
+
+        const color_blend_state = std.mem.zeroInit(c.VkPipelineColorBlendStateCreateInfo, .{
+            .sType = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+            .logicOpEnable = c.VK_FALSE,
+            .logicOp = c.VK_LOGIC_OP_COPY,
+            .attachmentCount = 1,
+            .pAttachments = &self.color_blend_attachment_state,
+        });
+
+        const pipeline_ci = std.mem.zeroInit(c.VkGraphicsPipelineCreateInfo, .{
+            .sType = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+            .stageCount = @as(u32, @intCast(self.shader_stages.len)),
+            .pStages = self.shader_stages.ptr,
+            .pVertexInputState = &self.vertex_input_state,
+            .pInputAssemblyState = &self.input_assembly_state,
+            .pViewportState = &viewport_state,
+            .pRasterizationState = &self.rasterization_state,
+            .pMultisampleState = &self.multisample_state,
+            .pColorBlendState = &color_blend_state,
+            .layout = self.pipeline_layout,
+            .renderPass = render_pass,
+            .subpass = 0,
+            .basePipelineHandle = VK_NULL_HANDLE,
+        });
+
+        var pipeline: c.VkPipeline = undefined;
+        check_vk(c.vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipeline_ci, vk_alloc_cbs, &pipeline)) catch {
+            log.err("Failed to create graphics pipeline", .{});
+            return VK_NULL_HANDLE;
+        };
+
+        return pipeline;
+    }
+};
+
+fn init_pipelines(self: *Self) void {
+    // NOTE: we are currently destroying the shader modules as soon as we are done
+    // creating the pipeline. This is not great if we needed the modules for multiple pipelines.
+    // Howver, for the sake of simplicity, we are doing it this way for now.
+    const vert_code align(4) = @embedFile("triangle.vert").*;
+    const frag_code align(4) = @embedFile("triangle.frag").*;
+    const vert_module = create_shader_module(self, &vert_code) orelse VK_NULL_HANDLE;
+    defer c.vkDestroyShaderModule(self.device, vert_module, vk_alloc_cbs);
+    const frag_module = create_shader_module(self, &frag_code) orelse VK_NULL_HANDLE;
+    defer c.vkDestroyShaderModule(self.device, frag_module, vk_alloc_cbs);
+
+    if (vert_module != VK_NULL_HANDLE) log.info("Vert module loaded successfully", .{});
+    if (frag_module != VK_NULL_HANDLE) log.info("Frag module loaded successfully", .{});
+
+    const pipeline_layout_ci = std.mem.zeroInit(c.VkPipelineLayoutCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+    });
+    check_vk(c.vkCreatePipelineLayout(self.device, &pipeline_layout_ci, vk_alloc_cbs, &self.triangle_pipeline_layout))
+        catch @panic("Failed to create pipeline layout");
+
+    const vert_stage_ci = std.mem.zeroInit(c.VkPipelineShaderStageCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .stage = c.VK_SHADER_STAGE_VERTEX_BIT,
+        .module = vert_module,
+        .pName = "main",
+    });
+
+    const frag_stage_ci = std.mem.zeroInit(c.VkPipelineShaderStageCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+        .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+        .module = frag_module,
+        .pName = "main",
+    });
+
+    const vertex_input_state_ci = std.mem.zeroInit(c.VkPipelineVertexInputStateCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+    });
+
+    const input_assembly_state_ci = std.mem.zeroInit(c.VkPipelineInputAssemblyStateCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .primitiveRestartEnable = c.VK_FALSE,
+    });
+
+    const rasterization_state_ci = std.mem.zeroInit(c.VkPipelineRasterizationStateCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .polygonMode = c.VK_POLYGON_MODE_FILL,
+        .cullMode = c.VK_CULL_MODE_NONE,
+        .frontFace = c.VK_FRONT_FACE_CLOCKWISE,
+        .lineWidth = 1.0,
+    });
+
+    const multisample_state_ci = std.mem.zeroInit(c.VkPipelineMultisampleStateCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .rasterizationSamples = c.VK_SAMPLE_COUNT_1_BIT,
+        .minSampleShading = 1.0,
+    });
+
+    const color_blend_attachment_state = std.mem.zeroInit(c.VkPipelineColorBlendAttachmentState, .{
+        .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT,
+    });
+
+    const pipeline_builder = PipelineBuilder{
+        .shader_stages = &.{
+            vert_stage_ci,
+            frag_stage_ci,
+        },
+        .vertex_input_state = vertex_input_state_ci,
+        .input_assembly_state = input_assembly_state_ci,
+        .viewport = .{
+            .x = 0.0,
+            .y = 0.0,
+            .width = @as(f32, @floatFromInt(self.swapchain_extent.width)),
+            .height = @as(f32, @floatFromInt(self.swapchain_extent.height)),
+            .minDepth = 0.0,
+            .maxDepth = 1.0,
+        },
+        .scissor = .{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = self.swapchain_extent,
+        },
+        .rasterization_state = rasterization_state_ci,
+        .color_blend_attachment_state = color_blend_attachment_state,
+        .multisample_state = multisample_state_ci,
+        .pipeline_layout = self.triangle_pipeline_layout,
+    };
+
+    self.triangle_pipeline = pipeline_builder.build(self.device, self.render_pass);
+    if (self.triangle_pipeline == VK_NULL_HANDLE) {
+        log.err("Failed to create triangle pipeline", .{});
+    } else {
+        log.info("Created triangle pipeline", .{});
+    }
+}
+
+fn create_shader_module(self: *Self, code: []const u8) ?c.VkShaderModule {
+    // NOTE: This being a better language than C/C++, means we don´t need to load
+    // the SPIR-V code from a file, we can just embed it as an array of bytes.
+    // To reflect the different behaviour from the original code, we also changed
+    // the function name.
+    std.debug.assert(code.len % 4 == 0);
+
+    const data: *const u32 = @alignCast(@ptrCast(code.ptr));
+
+    const shader_module_ci = std.mem.zeroInit(c.VkShaderModuleCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = code.len,
+        .pCode = data,
+    });
+
+    var shader_module: c.VkShaderModule = undefined;
+    check_vk(c.vkCreateShaderModule(self.device, &shader_module_ci, vk_alloc_cbs, &shader_module)) catch |err| {
+        log.err("Failed to create shader module with error: {s}", .{ @errorName(err) });
+        return null;
+    };
+
+    return shader_module;
+}
+
 pub fn cleanup(self: *Self) void {
     check_vk(c.vkDeviceWaitIdle(self.device))
         catch @panic("Failed to wait for device idle");
+
+    c.vkDestroyPipeline(self.device, self.triangle_pipeline, vk_alloc_cbs);
+    c.vkDestroyPipelineLayout(self.device, self.triangle_pipeline_layout, vk_alloc_cbs);
 
     c.vkDestroyFence(self.device, self.render_fence, vk_alloc_cbs);
     c.vkDestroySemaphore(self.device, self.render_semaphore, vk_alloc_cbs);
@@ -371,6 +551,9 @@ fn draw(self: *Self) void {
         .pClearValues = &clear_value,
     });
     c.vkCmdBeginRenderPass(cmd, &render_pass_begin_info, c.VK_SUBPASS_CONTENTS_INLINE);
+
+    c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.triangle_pipeline);
+    c.vkCmdDraw(cmd, 3, 1, 0, 0);
 
     c.vkCmdEndRenderPass(cmd);
     check_vk(c.vkEndCommandBuffer(cmd))
