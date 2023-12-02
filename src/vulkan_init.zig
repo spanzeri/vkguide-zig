@@ -316,6 +316,7 @@ pub const SwapchainCreateOpts = struct {
     surface: c.VkSurfaceKHR,
     old_swapchain: c.VkSwapchainKHR = null,
     vsync: bool = false,
+    triple_buffer: bool = false,
     window_width: u32 = 0,
     window_height: u32 = 0,
     alloc_cb: ?*c.VkAllocationCallbacks = null,
@@ -431,7 +432,7 @@ fn pick_swapchain_present_mode(modes: []const c.VkPresentModeKHR, opts: Swapchai
 
     // Prefer triple buffering if possible.
     for (modes) |mode| {
-        if (mode == c.VK_PRESENT_MODE_MAILBOX_KHR) {
+        if (mode == c.VK_PRESENT_MODE_MAILBOX_KHR and opts.triple_buffer) {
             return mode;
         }
     }

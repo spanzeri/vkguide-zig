@@ -47,6 +47,10 @@ main_command_buffer: c.VkCommandBuffer = VK_NULL_HANDLE,
 render_pass: c.VkRenderPass = VK_NULL_HANDLE,
 framebuffers: []c.VkFramebuffer = undefined,
 
+present_semaphore: c.VkSemaphore = VK_NULL_HANDLE,
+render_semaphore: c.VkSemaphore = VK_NULL_HANDLE,
+render_fence: c.VkFence = VK_NULL_HANDLE,
+
 pub fn init(a: std.mem.Allocator) Self {
     check_sdl(c.SDL_Init(c.SDL_INIT_VIDEO));
 
@@ -74,6 +78,7 @@ pub fn init(a: std.mem.Allocator) Self {
     engine.init_commands();
     engine.init_default_renderpass();
     engine.init_framebuffers();
+    engine.init_sync_structures();
 
     return engine;
 }
@@ -247,7 +252,35 @@ fn init_framebuffers(self: *Self) void {
     log.info("Created {} framebuffers", .{ self.framebuffers.len });
 }
 
+fn init_sync_structures(self: *Self) void {
+    const semaphore_ci = std.mem.zeroInit(c.VkSemaphoreCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+    });
+
+    check_vk(c.vkCreateSemaphore(self.device, &semaphore_ci, vk_alloc_cbs, &self.present_semaphore))
+        catch @panic("Failed to create present semaphore");
+    check_vk(c.vkCreateSemaphore(self.device, &semaphore_ci, vk_alloc_cbs, &self.render_semaphore))
+        catch @panic("Failed to create render semaphore");
+
+    const fence_ci = std.mem.zeroInit(c.VkFenceCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+        .flags = c.VK_FENCE_CREATE_SIGNALED_BIT,
+    });
+
+    check_vk(c.vkCreateFence(self.device, &fence_ci, vk_alloc_cbs, &self.render_fence))
+        catch @panic("Failed to create render fence");
+
+    log.info("Created sync structures", .{});
+}
+
 pub fn cleanup(self: *Self) void {
+    check_vk(c.vkDeviceWaitIdle(self.device))
+        catch @panic("Failed to wait for device idle");
+
+    c.vkDestroyFence(self.device, self.render_fence, vk_alloc_cbs);
+    c.vkDestroySemaphore(self.device, self.render_semaphore, vk_alloc_cbs);
+    c.vkDestroySemaphore(self.device, self.present_semaphore, vk_alloc_cbs);
+
     for (self.framebuffers) |framebuffer| {
         c.vkDestroyFramebuffer(self.device, framebuffer, vk_alloc_cbs);
     }
@@ -291,7 +324,84 @@ pub fn run(self: *Self) void {
 }
 
 fn draw(self: *Self) void {
-    _ = self;
+    // Wait until the GPU has finished rendering the last frame
+    const timeout: u64 = 1_000_000_000; // 1 second in nanonesconds
+    check_vk(c.vkWaitForFences(self.device, 1, &self.render_fence, c.VK_TRUE, timeout))
+        catch @panic("Failed to wait for render fence");
+    check_vk(c.vkResetFences(self.device, 1, &self.render_fence))
+        catch @panic("Failed to reset render fence");
+
+
+    var swapchain_image_index: u32 = undefined;
+    check_vk(c.vkAcquireNextImageKHR(self.device, self.swapchain, timeout, self.present_semaphore, VK_NULL_HANDLE, &swapchain_image_index))
+        catch @panic("Failed to acquire swapchain image");
+
+    check_vk(c.vkResetCommandBuffer(self.main_command_buffer, 0))
+        catch @panic("Failed to reset command buffer");
+
+    var cmd = self.main_command_buffer;
+
+    const cmd_begin_info = std.mem.zeroInit(c.VkCommandBufferBeginInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    });
+
+    check_vk(c.vkBeginCommandBuffer(cmd, &cmd_begin_info))
+        catch @panic("Failed to begin command buffer");
+
+    const state = struct {
+        var frame_number: u32 = 0;
+    };
+
+    // Make a claer color that changes with each frame (120*pi frame period)
+    const color = @fabs(std.math.sin(@as(f32, @floatFromInt(state.frame_number)) / 120.0));
+    const clear_value: c.VkClearValue = .{
+        .color = .{ .float32 = [_]f32{ 0.0, 0.0, color, 1.0 } },
+    };
+
+    const render_pass_begin_info = std.mem.zeroInit(c.VkRenderPassBeginInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+        .renderPass = self.render_pass,
+        .framebuffer = self.framebuffers[swapchain_image_index],
+        .renderArea = .{
+            .offset = .{ .x = 0, .y = 0 },
+            .extent = self.swapchain_extent,
+        },
+        .clearValueCount = 1,
+        .pClearValues = &clear_value,
+    });
+    c.vkCmdBeginRenderPass(cmd, &render_pass_begin_info, c.VK_SUBPASS_CONTENTS_INLINE);
+
+    c.vkCmdEndRenderPass(cmd);
+    check_vk(c.vkEndCommandBuffer(cmd))
+        catch @panic("Failed to end command buffer");
+
+    const wait_stage = @as(u32, @intCast(c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT));
+    const submit_info = std.mem.zeroInit(c.VkSubmitInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &self.present_semaphore,
+        .pWaitDstStageMask = &wait_stage,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &cmd,
+        .signalSemaphoreCount = 1,
+        .pSignalSemaphores = &self.render_semaphore,
+    });
+    check_vk(c.vkQueueSubmit(self.graphics_queue, 1, &submit_info, self.render_fence))
+        catch @panic("Failed to submit to graphics queue");
+
+    const present_info = std.mem.zeroInit(c.VkPresentInfoKHR, .{
+        .sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &self.render_semaphore,
+        .swapchainCount = 1,
+        .pSwapchains = &self.swapchain,
+        .pImageIndices = &swapchain_image_index,
+    });
+    check_vk(c.vkQueuePresentKHR(self.present_queue, &present_info))
+        catch @panic("Failed to present swapchain image");
+
+    state.frame_number += 1;
 }
 
 // Error checking for vulkan and SDL
