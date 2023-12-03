@@ -14,8 +14,7 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("vulkan");
     exe.linkLibC();
 
-    add_shader(b, exe, "triangle.vert");
-    add_shader(b, exe, "triangle.frag");
+    compile_all_shaders(b, exe);
 
     b.installArtifact(exe);
 
@@ -40,6 +39,24 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_unit_tests.step);
+}
+
+fn compile_all_shaders(b: *std.Build, exe: *std.Build.CompileStep) void {
+    const shaders_dir = b.build_root.handle.openIterableDir("shaders", .{}) catch @panic("Failed to open shaders directory");
+
+    var file_it = shaders_dir.iterate();
+    while (file_it.next() catch @panic("Failed to iterate shader directory")) |entry| {
+        if (entry.kind == .file) {
+            const ext = std.fs.path.extension(entry.name);
+            if (std.mem.eql(u8, ext, ".glsl")) {
+                const basename = std.fs.path.basename(entry.name);
+                const name = basename[0..basename.len - ext.len];
+
+                std.log.info("Found shader file to compile: {s}. Compiling with name: {s}", .{ entry.name, name });
+                add_shader(b, exe, name);
+            }
+        }
+    }
 }
 
 fn add_shader(b: *std.Build, exe: *std.Build.CompileStep, name: []const u8) void {

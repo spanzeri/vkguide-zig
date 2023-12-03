@@ -17,6 +17,7 @@ const vk_alloc_cbs: ?*c.VkAllocationCallbacks = null;
 // Data
 //
 frame_number: i32 = 0,
+selected_shader: i32 = 0,
 
 window: *c.SDL_Window = undefined,
 
@@ -52,7 +53,39 @@ render_semaphore: c.VkSemaphore = VK_NULL_HANDLE,
 render_fence: c.VkFence = VK_NULL_HANDLE,
 
 triangle_pipeline_layout: c.VkPipelineLayout = VK_NULL_HANDLE,
-triangle_pipeline: c.VkPipeline = VK_NULL_HANDLE,
+red_triangle_pipeline: c.VkPipeline = VK_NULL_HANDLE,
+rgb_triangle_pipeline: c.VkPipeline = VK_NULL_HANDLE,
+
+deletion_queue: std.ArrayList(VulkanDeleter) = undefined,
+
+const VulkanDeleter = struct {
+    object: ?*anyopaque,
+    delete: *const fn(entry: *VulkanDeleter, self: *Self) void,
+
+    fn make(object: anytype, func: anytype) VulkanDeleter {
+        // Vulkan objects are expected to be optional pointers to struct.
+        const Ptr = @TypeOf(object);
+        if (@typeInfo(Ptr) != .Optional) @compileError("DeletionEntry: object must be an optional pointer");
+        if (@typeInfo(@typeInfo(Ptr).Optional.child) != .Pointer) @compileError("DeletionEntry: object must be an optional pointer");
+        const ptr_info = @typeInfo(@typeInfo(Ptr).Optional.child);
+        if (ptr_info.Pointer.size != .One) @compileError("DeletionEntry: object must be a pointer to a single object");
+
+        // Fn should be a function
+        const Fn = @TypeOf(func);
+        const fn_info = @typeInfo(Fn);
+        if (fn_info != .Fn) @compileError("DeletionEntry: func must be a function pointer");
+
+        return VulkanDeleter {
+            .object = object,
+            .delete = struct {
+                fn do_destroy(entry: *VulkanDeleter, self: *Self) void {
+                    const obj: Ptr = @ptrCast(entry.object);
+                    func(self.device, obj, vk_alloc_cbs);
+                }
+            }.do_destroy,
+        };
+    }
+};
 
 pub fn init(a: std.mem.Allocator) Self {
     check_sdl(c.SDL_Init(c.SDL_INIT_VIDEO));
@@ -69,6 +102,7 @@ pub fn init(a: std.mem.Allocator) Self {
     var engine = Self{
         .window = window,
         .allocator = a,
+        .deletion_queue = std.ArrayList(VulkanDeleter).init(a),
     };
 
     engine.init_instance();
@@ -171,6 +205,10 @@ fn init_swapchain(self: *Self) void {
     self.swapchain_images = swapchain.images;
     self.swapchain_image_views = swapchain.image_views;
 
+    for (self.swapchain_image_views) |view|
+        self.deletion_queue.append(VulkanDeleter.make(view, c.vkDestroyImageView)) catch @panic("Out of memory");
+    self.deletion_queue.append(VulkanDeleter.make(swapchain.handle, c.vkDestroySwapchainKHR)) catch @panic("Out of memory");
+
     log.info("Created swapchain", .{});
 }
 
@@ -184,6 +222,7 @@ fn init_commands(self: *Self) void {
 
     check_vk(c.vkCreateCommandPool(self.device, &command_pool_ci, vk_alloc_cbs, &self.command_pool))
         catch log.err("Failed to create command pool", .{});
+    self.deletion_queue.append(VulkanDeleter.make(self.command_pool, c.vkDestroyCommandPool)) catch @panic("Out of memory");
 
     // Allocate a command buffer from the command pool
     const command_buffer_ai = std.mem.zeroInit(c.VkCommandBufferAllocateInfo, .{
@@ -232,6 +271,8 @@ fn init_default_renderpass(self: *Self) void {
 
     check_vk(c.vkCreateRenderPass(self.device, &render_pass_create_info, vk_alloc_cbs, &self.render_pass))
         catch @panic("Failed to create render pass");
+    self.deletion_queue.append(VulkanDeleter.make(self.render_pass, c.vkDestroyRenderPass)) catch @panic("Out of memory");
+
     log.info("Created render pass", .{});
 }
 
@@ -251,6 +292,7 @@ fn init_framebuffers(self: *Self) void {
         framebuffer_ci.pAttachments = &view;
         check_vk(c.vkCreateFramebuffer(self.device, &framebuffer_ci, vk_alloc_cbs, framebuffer))
             catch @panic("Failed to create framebuffer");
+        self.deletion_queue.append(VulkanDeleter.make(framebuffer.*, c.vkDestroyFramebuffer)) catch @panic("Out of memory");
     }
 
     log.info("Created {} framebuffers", .{ self.framebuffers.len });
@@ -263,8 +305,10 @@ fn init_sync_structures(self: *Self) void {
 
     check_vk(c.vkCreateSemaphore(self.device, &semaphore_ci, vk_alloc_cbs, &self.present_semaphore))
         catch @panic("Failed to create present semaphore");
+    self.deletion_queue.append(VulkanDeleter.make(self.present_semaphore, c.vkDestroySemaphore)) catch @panic("Out of memory");
     check_vk(c.vkCreateSemaphore(self.device, &semaphore_ci, vk_alloc_cbs, &self.render_semaphore))
         catch @panic("Failed to create render semaphore");
+    self.deletion_queue.append(VulkanDeleter.make(self.render_semaphore, c.vkDestroySemaphore)) catch @panic("Out of memory");
 
     const fence_ci = std.mem.zeroInit(c.VkFenceCreateInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
@@ -273,12 +317,13 @@ fn init_sync_structures(self: *Self) void {
 
     check_vk(c.vkCreateFence(self.device, &fence_ci, vk_alloc_cbs, &self.render_fence))
         catch @panic("Failed to create render fence");
+    self.deletion_queue.append(VulkanDeleter.make(self.render_fence, c.vkDestroyFence)) catch @panic("Out of memory");
 
     log.info("Created sync structures", .{});
 }
 
 const PipelineBuilder = struct {
-    shader_stages: []const c.VkPipelineShaderStageCreateInfo,
+    shader_stages: []c.VkPipelineShaderStageCreateInfo,
     vertex_input_state: c.VkPipelineVertexInputStateCreateInfo,
     input_assembly_state: c.VkPipelineInputAssemblyStateCreateInfo,
     viewport: c.VkViewport,
@@ -335,33 +380,34 @@ fn init_pipelines(self: *Self) void {
     // NOTE: we are currently destroying the shader modules as soon as we are done
     // creating the pipeline. This is not great if we needed the modules for multiple pipelines.
     // Howver, for the sake of simplicity, we are doing it this way for now.
-    const vert_code align(4) = @embedFile("triangle.vert").*;
-    const frag_code align(4) = @embedFile("triangle.frag").*;
-    const vert_module = create_shader_module(self, &vert_code) orelse VK_NULL_HANDLE;
-    defer c.vkDestroyShaderModule(self.device, vert_module, vk_alloc_cbs);
-    const frag_module = create_shader_module(self, &frag_code) orelse VK_NULL_HANDLE;
-    defer c.vkDestroyShaderModule(self.device, frag_module, vk_alloc_cbs);
+    const red_vert_code align(4) = @embedFile("triangle.vert").*;
+    const red_frag_code align(4) = @embedFile("triangle.frag").*;
+    const red_vert_module = create_shader_module(self, &red_vert_code) orelse VK_NULL_HANDLE;
+    defer c.vkDestroyShaderModule(self.device, red_vert_module, vk_alloc_cbs);
+    const red_frag_module = create_shader_module(self, &red_frag_code) orelse VK_NULL_HANDLE;
+    defer c.vkDestroyShaderModule(self.device, red_frag_module, vk_alloc_cbs);
 
-    if (vert_module != VK_NULL_HANDLE) log.info("Vert module loaded successfully", .{});
-    if (frag_module != VK_NULL_HANDLE) log.info("Frag module loaded successfully", .{});
+    if (red_vert_module != VK_NULL_HANDLE) log.info("Vert module loaded successfully", .{});
+    if (red_frag_module != VK_NULL_HANDLE) log.info("Frag module loaded successfully", .{});
 
     const pipeline_layout_ci = std.mem.zeroInit(c.VkPipelineLayoutCreateInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
     });
     check_vk(c.vkCreatePipelineLayout(self.device, &pipeline_layout_ci, vk_alloc_cbs, &self.triangle_pipeline_layout))
         catch @panic("Failed to create pipeline layout");
+    self.deletion_queue.append(VulkanDeleter.make(self.triangle_pipeline_layout, c.vkDestroyPipelineLayout)) catch @panic("Out of memory");
 
     const vert_stage_ci = std.mem.zeroInit(c.VkPipelineShaderStageCreateInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
         .stage = c.VK_SHADER_STAGE_VERTEX_BIT,
-        .module = vert_module,
+        .module = red_vert_module,
         .pName = "main",
     });
 
     const frag_stage_ci = std.mem.zeroInit(c.VkPipelineShaderStageCreateInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
         .stage = c.VK_SHADER_STAGE_FRAGMENT_BIT,
-        .module = frag_module,
+        .module = red_frag_module,
         .pName = "main",
     });
 
@@ -393,11 +439,12 @@ fn init_pipelines(self: *Self) void {
         .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT,
     });
 
-    const pipeline_builder = PipelineBuilder{
-        .shader_stages = &.{
-            vert_stage_ci,
-            frag_stage_ci,
-        },
+    var shader_stages = [_]c.VkPipelineShaderStageCreateInfo{
+        vert_stage_ci,
+        frag_stage_ci,
+    };
+    var pipeline_builder = PipelineBuilder{
+        .shader_stages = shader_stages[0..],
         .vertex_input_state = vertex_input_state_ci,
         .input_assembly_state = input_assembly_state_ci,
         .viewport = .{
@@ -418,11 +465,33 @@ fn init_pipelines(self: *Self) void {
         .pipeline_layout = self.triangle_pipeline_layout,
     };
 
-    self.triangle_pipeline = pipeline_builder.build(self.device, self.render_pass);
-    if (self.triangle_pipeline == VK_NULL_HANDLE) {
-        log.err("Failed to create triangle pipeline", .{});
+    self.red_triangle_pipeline = pipeline_builder.build(self.device, self.render_pass);
+    self.deletion_queue.append(VulkanDeleter.make(self.red_triangle_pipeline, c.vkDestroyPipeline)) catch @panic("Out of memory");
+    if (self.red_triangle_pipeline == VK_NULL_HANDLE) {
+        log.err("Failed to create red triangle pipeline", .{});
     } else {
-        log.info("Created triangle pipeline", .{});
+        log.info("Created red triangle pipeline", .{});
+    }
+
+    const rgb_vert_code align(4) = @embedFile("colored_triangle.vert").*;
+    const rgb_frag_code align(4) = @embedFile("colored_triangle.frag").*;
+    const rgb_vert_module = create_shader_module(self, &rgb_vert_code) orelse VK_NULL_HANDLE;
+    defer c.vkDestroyShaderModule(self.device, rgb_vert_module, vk_alloc_cbs);
+    const rgb_frag_module = create_shader_module(self, &rgb_frag_code) orelse VK_NULL_HANDLE;
+    defer c.vkDestroyShaderModule(self.device, rgb_frag_module, vk_alloc_cbs);
+
+    if (rgb_vert_module != VK_NULL_HANDLE) log.info("Vert module loaded successfully", .{});
+    if (rgb_frag_module != VK_NULL_HANDLE) log.info("Frag module loaded successfully", .{});
+
+    pipeline_builder.shader_stages[0].module = rgb_vert_module;
+    pipeline_builder.shader_stages[1].module = rgb_frag_module;
+
+    self.rgb_triangle_pipeline = pipeline_builder.build(self.device, self.render_pass);
+    self.deletion_queue.append(VulkanDeleter.make(self.rgb_triangle_pipeline, c.vkDestroyPipeline)) catch @panic("Out of memory");
+    if (self.rgb_triangle_pipeline == VK_NULL_HANDLE) {
+        log.err("Failed to create rgb triangle pipeline", .{});
+    } else {
+        log.info("Created rgb triangle pipeline", .{});
     }
 }
 
@@ -454,26 +523,12 @@ pub fn cleanup(self: *Self) void {
     check_vk(c.vkDeviceWaitIdle(self.device))
         catch @panic("Failed to wait for device idle");
 
-    c.vkDestroyPipeline(self.device, self.triangle_pipeline, vk_alloc_cbs);
-    c.vkDestroyPipelineLayout(self.device, self.triangle_pipeline_layout, vk_alloc_cbs);
-
-    c.vkDestroyFence(self.device, self.render_fence, vk_alloc_cbs);
-    c.vkDestroySemaphore(self.device, self.render_semaphore, vk_alloc_cbs);
-    c.vkDestroySemaphore(self.device, self.present_semaphore, vk_alloc_cbs);
-
-    for (self.framebuffers) |framebuffer| {
-        c.vkDestroyFramebuffer(self.device, framebuffer, vk_alloc_cbs);
+    for (self.deletion_queue.items) |*entry| {
+        entry.delete(entry, self);
     }
+    self.deletion_queue.deinit();
+
     self.allocator.free(self.framebuffers);
-
-    c.vkDestroyRenderPass(self.device, self.render_pass, vk_alloc_cbs);
-
-    c.vkDestroyCommandPool(self.device, self.command_pool, vk_alloc_cbs);
-
-    c.vkDestroySwapchainKHR(self.device, self.swapchain, vk_alloc_cbs);
-    for (self.swapchain_image_views) |view| {
-        c.vkDestroyImageView(self.device, view, vk_alloc_cbs);
-    }
     self.allocator.free(self.swapchain_image_views);
     self.allocator.free(self.swapchain_images);
 
@@ -496,6 +551,13 @@ pub fn run(self: *Self) void {
         while (c.SDL_PollEvent(&event) != 0) {
             if (event.type == c.SDL_EVENT_QUIT) {
                 quit = true;
+            } else if (event.type == c.SDL_EVENT_KEY_DOWN) {
+                switch (event.key.keysym.scancode) {
+                    c.SDL_SCANCODE_SPACE => {
+                        self.selected_shader = if (self.selected_shader == 1) 0 else 1;
+                    },
+                    else => {},
+                }
             }
         }
 
@@ -552,7 +614,9 @@ fn draw(self: *Self) void {
     });
     c.vkCmdBeginRenderPass(cmd, &render_pass_begin_info, c.VK_SUBPASS_CONTENTS_INLINE);
 
-    c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.triangle_pipeline);
+    const pipeline = if (self.selected_shader == 0) self.red_triangle_pipeline else self.rgb_triangle_pipeline;
+
+    c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
     c.vkCmdDraw(cmd, 3, 1, 0, 0);
 
     c.vkCmdEndRenderPass(cmd);
