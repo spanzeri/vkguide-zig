@@ -3,6 +3,10 @@ const c = @import("clibs.zig");
 
 const vki = @import("vulkan_init.zig");
 const check_vk = vki.check_vk;
+const mesh_mod = @import("mesh.zig");
+const Mesh = mesh_mod.Mesh;
+const math3d = @import("math3d.zig");
+const Vec3 = math3d.Vec3;
 
 const log = std.log.scoped(.vulkan_engine);
 
@@ -13,6 +17,11 @@ const window_extent = c.VkExtent2D{ .width = 1600, .height = 900 };
 const VK_NULL_HANDLE = null;
 
 const vk_alloc_cbs: ?*c.VkAllocationCallbacks = null;
+
+pub const AllocatedBuffer = struct {
+    buffer: c.VkBuffer,
+    allocation: c.VmaAllocation,
+};
 
 // Data
 //
@@ -56,34 +65,51 @@ triangle_pipeline_layout: c.VkPipelineLayout = VK_NULL_HANDLE,
 red_triangle_pipeline: c.VkPipeline = VK_NULL_HANDLE,
 rgb_triangle_pipeline: c.VkPipeline = VK_NULL_HANDLE,
 
+vma_allocator: c.VmaAllocator = undefined,
+
+mesh_pipeline: c.VkPipeline = VK_NULL_HANDLE,
+triangle_mesh: Mesh = undefined,
+
 deletion_queue: std.ArrayList(VulkanDeleter) = undefined,
+buffer_deletion_queue: std.ArrayList(VmaBufferDeleter) = undefined,
 
 const VulkanDeleter = struct {
     object: ?*anyopaque,
-    delete: *const fn(entry: *VulkanDeleter, self: *Self) void,
+    delete_fn: *const fn(entry: *VulkanDeleter, self: *Self) void,
+
+    fn delete(self: *VulkanDeleter, engine: *Self) void {
+        self.delete_fn(self, engine);
+    }
 
     fn make(object: anytype, func: anytype) VulkanDeleter {
-        // Vulkan objects are expected to be optional pointers to struct.
-        const Ptr = @TypeOf(object);
-        if (@typeInfo(Ptr) != .Optional) @compileError("DeletionEntry: object must be an optional pointer");
-        if (@typeInfo(@typeInfo(Ptr).Optional.child) != .Pointer) @compileError("DeletionEntry: object must be an optional pointer");
-        const ptr_info = @typeInfo(@typeInfo(Ptr).Optional.child);
-        if (ptr_info.Pointer.size != .One) @compileError("DeletionEntry: object must be a pointer to a single object");
+        const T = @TypeOf(object);
+        comptime {
+            std.debug.assert(@typeInfo(T) == .Optional);
+            const Ptr = @typeInfo(T).Optional.child;
+            std.debug.assert(@typeInfo(Ptr) == .Pointer);
+            std.debug.assert(@typeInfo(Ptr).Pointer.size == .One);
 
-        // Fn should be a function
-        const Fn = @TypeOf(func);
-        const fn_info = @typeInfo(Fn);
-        if (fn_info != .Fn) @compileError("DeletionEntry: func must be a function pointer");
+            const Fn = @TypeOf(func);
+            std.debug.assert(@typeInfo(Fn) == .Fn);
+        }
 
         return VulkanDeleter {
             .object = object,
-            .delete = struct {
-                fn do_destroy(entry: *VulkanDeleter, self: *Self) void {
-                    const obj: Ptr = @ptrCast(entry.object);
+            .delete_fn = struct {
+                fn destroy_impl(entry: *VulkanDeleter, self: *Self) void {
+                    const obj: @TypeOf(object) = @ptrCast(entry.object);
                     func(self.device, obj, vk_alloc_cbs);
                 }
-            }.do_destroy,
+            }.destroy_impl,
         };
+    }
+};
+
+const VmaBufferDeleter = struct {
+    buffer: AllocatedBuffer,
+
+    fn delete(self: *VmaBufferDeleter, engine: *Self) void {
+        c.vmaDestroyBuffer(engine.vma_allocator, self.buffer.buffer, self.buffer.allocation);
     }
 };
 
@@ -103,6 +129,7 @@ pub fn init(a: std.mem.Allocator) Self {
         .window = window,
         .allocator = a,
         .deletion_queue = std.ArrayList(VulkanDeleter).init(a),
+        .buffer_deletion_queue = std.ArrayList(VmaBufferDeleter).init(a),
     };
 
     engine.init_instance();
@@ -111,12 +138,23 @@ pub fn init(a: std.mem.Allocator) Self {
     check_sdl_bool(c.SDL_Vulkan_CreateSurface(window, engine.instance, &engine.surface));
 
     engine.init_device();
+
+    // Create a VMA allocator
+    const allocator_ci = std.mem.zeroInit(c.VmaAllocatorCreateInfo, .{
+        .physicalDevice = engine.physical_device,
+        .device = engine.device,
+        .instance = engine.instance,
+    });
+    check_vk(c.vmaCreateAllocator(&allocator_ci, &engine.vma_allocator))
+        catch @panic("Failed to create VMA allocator");
+
     engine.init_swapchain();
     engine.init_commands();
     engine.init_default_renderpass();
     engine.init_framebuffers();
     engine.init_sync_structures();
     engine.init_pipelines();
+    engine.load_meshes();
 
     return engine;
 }
@@ -128,7 +166,7 @@ fn init_instance(self: *Self) void {
 
     var sdl_required_extension_count: u32 = undefined;
     check_sdl_bool(c.SDL_Vulkan_GetInstanceExtensions(&sdl_required_extension_count, null));
-    var sdl_required_extensions = arena.alloc([*c]const u8, sdl_required_extension_count) catch @panic("Out of memory");
+    const sdl_required_extensions = arena.alloc([*c]const u8, sdl_required_extension_count) catch @panic("Out of memory");
     check_sdl_bool(c.SDL_Vulkan_GetInstanceExtensions(&sdl_required_extension_count, sdl_required_extensions.ptr));
 
     // Instance creation and optional debug utilities
@@ -493,6 +531,31 @@ fn init_pipelines(self: *Self) void {
     } else {
         log.info("Created rgb triangle pipeline", .{});
     }
+
+    // Create mesh pipeline for meshes
+    const vertex_descritpion = mesh_mod.Vertex.vertex_input_description;
+
+    pipeline_builder.vertex_input_state.pVertexAttributeDescriptions = vertex_descritpion.attributes.ptr;
+    pipeline_builder.vertex_input_state.vertexAttributeDescriptionCount = @as(u32, @intCast(vertex_descritpion.attributes.len));
+    pipeline_builder.vertex_input_state.pVertexBindingDescriptions = vertex_descritpion.bindings.ptr;
+    pipeline_builder.vertex_input_state.vertexBindingDescriptionCount = @as(u32, @intCast(vertex_descritpion.bindings.len));
+
+    const tri_mesh_vert_code align(4) = @embedFile("tri_mesh.vert").*;
+    const tri_mesh_vert_module = create_shader_module(self, &tri_mesh_vert_code) orelse VK_NULL_HANDLE;
+    defer c.vkDestroyShaderModule(self.device, tri_mesh_vert_module, vk_alloc_cbs);
+
+    if (tri_mesh_vert_module != VK_NULL_HANDLE) log.info("Vert module loaded successfully", .{});
+
+    pipeline_builder.shader_stages[0].module = tri_mesh_vert_module;
+    pipeline_builder.shader_stages[1].module = rgb_frag_module; //NOTE: Use the one above
+
+    self.mesh_pipeline = pipeline_builder.build(self.device, self.render_pass);
+    self.deletion_queue.append(VulkanDeleter.make(self.mesh_pipeline, c.vkDestroyPipeline)) catch @panic("Out of memory");
+    if (self.mesh_pipeline == VK_NULL_HANDLE) {
+        log.err("Failed to create mesh pipeline", .{});
+    } else {
+        log.info("Created mesh pipeline", .{});
+    }
 }
 
 fn create_shader_module(self: *Self, code: []const u8) ?c.VkShaderModule {
@@ -523,14 +586,22 @@ pub fn cleanup(self: *Self) void {
     check_vk(c.vkDeviceWaitIdle(self.device))
         catch @panic("Failed to wait for device idle");
 
+    for (self.buffer_deletion_queue.items) |*entry| {
+        entry.delete(self);
+    }
+    self.buffer_deletion_queue.deinit();
     for (self.deletion_queue.items) |*entry| {
-        entry.delete(entry, self);
+        entry.delete(self);
     }
     self.deletion_queue.deinit();
+
+    self.allocator.free(self.triangle_mesh.vertices);
 
     self.allocator.free(self.framebuffers);
     self.allocator.free(self.swapchain_image_views);
     self.allocator.free(self.swapchain_images);
+
+    c.vmaDestroyAllocator(self.vma_allocator);
 
     c.vkDestroyDevice(self.device, vk_alloc_cbs);
     c.vkDestroySurfaceKHR(self.instance, self.surface, vk_alloc_cbs);
@@ -542,6 +613,66 @@ pub fn cleanup(self: *Self) void {
 
     c.vkDestroyInstance(self.instance, vk_alloc_cbs);
     c.SDL_DestroyWindow(self.window);
+}
+
+fn load_meshes(self: *Self) void {
+    var vertices = self.allocator.alloc(mesh_mod.Vertex, 3) catch @panic("Out of memory");
+
+    vertices[0] = .{
+        .position = .{ .x =  1.0, .y =  1.0, .z = 0.0 },
+        .normal = undefined,
+        .color = .{ .x = 0.0, .y = 1.0, .z = 0.0 }
+    };
+
+    vertices[1] = .{
+        .position = .{ .x = -1.0, .y =  1.0, .z = 0.0 },
+        .normal = undefined,
+        .color = .{ .x = 0.0, .y = 1.0, .z = 0.0 }
+    };
+
+    vertices[2] = .{
+        .position = .{ .x =  0.0, .y = -1.0, .z = 0.0 },
+        .normal = undefined,
+        .color = .{ .x = 0.0, .y = 1.0, .z = 0.0 }
+    };
+
+    self.triangle_mesh = Mesh{
+        .vertices = vertices,
+    };
+
+    upload_mesh(self, &self.triangle_mesh);
+}
+
+fn upload_mesh(self: *Self, mesh: *Mesh) void {
+    const buffer_ci = std.mem.zeroInit(c.VkBufferCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = mesh.vertices.len * @sizeOf(mesh_mod.Vertex),
+        .usage = c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+    });
+
+    const vma_alloc_info = std.mem.zeroInit(c.VmaAllocationCreateInfo, .{
+        .usage = c.VMA_MEMORY_USAGE_CPU_TO_GPU,
+    });
+
+    check_vk(c.vmaCreateBuffer(
+        self.vma_allocator,
+        &buffer_ci,
+        &vma_alloc_info,
+        &mesh.vertex_buffer.buffer,
+        &mesh.vertex_buffer.allocation,
+        null)) catch @panic("Failed to create vertex buffer");
+
+    log.info("Created buffer {}", .{ @intFromPtr(mesh.vertex_buffer.buffer) });
+
+    self.buffer_deletion_queue.append(
+        VmaBufferDeleter{ .buffer = mesh.vertex_buffer }
+    ) catch @panic("Out of memory");
+
+    var data: ?*align(@alignOf(mesh_mod.Vertex)) anyopaque = undefined;
+    check_vk(c.vmaMapMemory(self.vma_allocator, mesh.vertex_buffer.allocation, &data))
+        catch @panic("Failed to map vertex buffer");
+    @memcpy(@as([*]mesh_mod.Vertex, @ptrCast(data)), mesh.vertices);
+    c.vmaUnmapMemory(self.vma_allocator, mesh.vertex_buffer.allocation);
 }
 
 pub fn run(self: *Self) void {
@@ -614,10 +745,12 @@ fn draw(self: *Self) void {
     });
     c.vkCmdBeginRenderPass(cmd, &render_pass_begin_info, c.VK_SUBPASS_CONTENTS_INLINE);
 
-    const pipeline = if (self.selected_shader == 0) self.red_triangle_pipeline else self.rgb_triangle_pipeline;
+    c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.mesh_pipeline);
 
-    c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    c.vkCmdDraw(cmd, 3, 1, 0, 0);
+    const offset: c.VkDeviceSize = 0;
+    c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.triangle_mesh.vertex_buffer.buffer, &offset);
+
+    c.vkCmdDraw(cmd, @as(u32, @intCast(self.triangle_mesh.vertices.len)), 1, 0, 0);
 
     c.vkCmdEndRenderPass(cmd);
     check_vk(c.vkEndCommandBuffer(cmd))

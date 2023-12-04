@@ -47,12 +47,12 @@ pub fn create_instance(alloc: std.mem.Allocator, opts: VkiInstanceOpts) !Instanc
     // Get supported layers and extensions
     var layer_count: u32 = undefined;
     try check_vk(c.vkEnumerateInstanceLayerProperties(&layer_count, null));
-    var layer_props = try arena.alloc(c.VkLayerProperties, layer_count);
+    const layer_props = try arena.alloc(c.VkLayerProperties, layer_count);
     try check_vk(c.vkEnumerateInstanceLayerProperties(&layer_count, layer_props.ptr));
 
     var extension_count: u32 = undefined;
     try check_vk(c.vkEnumerateInstanceExtensionProperties(null, &extension_count, null));
-    var extension_props = try arena.alloc(c.VkExtensionProperties, extension_count);
+    const extension_props = try arena.alloc(c.VkExtensionProperties, extension_count);
     try check_vk(c.vkEnumerateInstanceExtensionProperties(null, &extension_count, extension_props.ptr));
 
     // Check if the validation layer is supported
@@ -184,7 +184,7 @@ pub fn select_physical_device(
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    var physical_devices = try arena.alloc(c.VkPhysicalDevice, physical_device_count);
+    const physical_devices = try arena.alloc(c.VkPhysicalDevice, physical_device_count);
     try check_vk(c.vkEnumeratePhysicalDevices(instance, &physical_device_count, physical_devices.ptr));
 
     var suitable_pd: ?PhysicalDevice = null;
@@ -341,7 +341,7 @@ pub fn create_swapchain(a: std.mem.Allocator, opts: SwapchainCreateOpts) !Swapch
     const extent = make_swapchain_extent(support_info.capabilities, opts);
 
     const image_count = blk: {
-        var desired_count = support_info.capabilities.minImageCount + 1;
+        const desired_count = support_info.capabilities.minImageCount + 1;
         if (support_info.capabilities.maxImageCount > 0) {
             break :blk @min(desired_count, support_info.capabilities.maxImageCount);
         }
@@ -384,12 +384,12 @@ pub fn create_swapchain(a: std.mem.Allocator, opts: SwapchainCreateOpts) !Swapch
     // Try and fetch the images from the swpachain.
     var swapchain_image_count: u32 = undefined;
     try check_vk(c.vkGetSwapchainImagesKHR(opts.device, swapchain, &swapchain_image_count, null));
-    var swapchain_images = try a.alloc(c.VkImage, swapchain_image_count);
+    const swapchain_images = try a.alloc(c.VkImage, swapchain_image_count);
     errdefer a.free(swapchain_images);
     try check_vk(c.vkGetSwapchainImagesKHR(opts.device, swapchain, &swapchain_image_count, swapchain_images.ptr));
 
     // Create image views for the swapchain images.
-    var swapchain_image_views = try a.alloc(c.VkImageView, swapchain_image_count);
+    const swapchain_image_views = try a.alloc(c.VkImageView, swapchain_image_count);
     errdefer a.free(swapchain_image_views);
 
     for (swapchain_images, swapchain_image_views) |image, *view| {
@@ -476,7 +476,7 @@ fn make_physical_device(
 
     var queue_family_count: u32 = undefined;
     c.vkGetPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, null);
-    var queue_families = try a.alloc(c.VkQueueFamilyProperties, queue_family_count);
+    const queue_families = try a.alloc(c.VkQueueFamilyProperties, queue_family_count);
     defer a.free(queue_families);
     c.vkGetPhysicalDeviceQueueFamilyProperties(device, &queue_family_count, queue_families.ptr);
 
@@ -551,7 +551,7 @@ fn is_physical_device_suitable(a: std.mem.Allocator, device: PhysicalDevice, opt
     if (opts.required_extensions.len > 0) {
         var device_extension_count: u32 = undefined;
         try check_vk(c.vkEnumerateDeviceExtensionProperties(device.handle, null, &device_extension_count, null));
-        var device_extensions = try arena.alloc(c.VkExtensionProperties, device_extension_count);
+        const device_extensions = try arena.alloc(c.VkExtensionProperties, device_extension_count);
         try check_vk(c.vkEnumerateDeviceExtensionProperties(device.handle, null, &device_extension_count, device_extensions.ptr));
 
         _ = blk: for (opts.required_extensions) |req_ext| {
@@ -578,12 +578,12 @@ const SwapchainSupportInfo = struct {
 
         var format_count: u32 = undefined;
         try check_vk(c.vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &format_count, null));
-        var formats = try a.alloc(c.VkSurfaceFormatKHR, format_count);
+        const formats = try a.alloc(c.VkSurfaceFormatKHR, format_count);
         try check_vk(c.vkGetPhysicalDeviceSurfaceFormatsKHR(device, surface, &format_count, formats.ptr));
 
         var present_mode_count: u32 = undefined;
         try check_vk(c.vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &present_mode_count, null));
-        var present_modes = try a.alloc(c.VkPresentModeKHR, present_mode_count);
+        const present_modes = try a.alloc(c.VkPresentModeKHR, present_mode_count);
         try check_vk(c.vkGetPhysicalDeviceSurfacePresentModesKHR(device, surface, &present_mode_count, present_modes.ptr));
 
         return .{
@@ -632,7 +632,7 @@ fn create_image_view(
 }
 
 fn get_vulkan_instance_funct(comptime Fn: type, instance: c.VkInstance, name: [*c]const u8) Fn {
-    var get_proc_addr: c.PFN_vkGetInstanceProcAddr = @ptrCast(c.SDL_Vulkan_GetVkGetInstanceProcAddr());
+    const get_proc_addr: c.PFN_vkGetInstanceProcAddr = @ptrCast(c.SDL_Vulkan_GetVkGetInstanceProcAddr());
     if (get_proc_addr) |get_proc_addr_fn| {
         return @ptrCast(get_proc_addr_fn(instance, name));
     }
@@ -676,7 +676,7 @@ fn default_debug_callback(
     user_data: ?*anyopaque
 ) callconv(.C) c.VkBool32 {
     _ = user_data;
-    var severity_str = switch (severity) {
+    const severity_str = switch (severity) {
         c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT => "verbose",
         c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT => "info",
         c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT => "warning",
@@ -684,7 +684,7 @@ fn default_debug_callback(
         else => "unknown",
     };
 
-    var type_str = switch (msg_type) {
+    const type_str = switch (msg_type) {
         c.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT => "general",
         c.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT => "validation",
         c.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT => "performance",

@@ -12,7 +12,9 @@ pub fn build(b: *std.Build) void {
     });
     exe.linkSystemLibrary("sdl3");
     exe.linkSystemLibrary("vulkan");
-    exe.linkLibC();
+    exe.addCSourceFile(.{ .file = .{ .path = "src/vk_mem_alloc.cpp" }, .flags = &.{ "" } });
+    exe.addIncludePath(.{ .path = "thirdparty/vma/" });
+    exe.linkLibCpp();
 
     compile_all_shaders(b, exe);
 
@@ -42,6 +44,8 @@ pub fn build(b: *std.Build) void {
 }
 
 fn compile_all_shaders(b: *std.Build, exe: *std.Build.CompileStep) void {
+    // NOTE: for 0.12.0 we need to change to this line
+    // const shaders_dir = b.build_root.handle.openDir("shaders", .{ .iterate = true }) catch @panic("Failed to open shaders directory");
     const shaders_dir = b.build_root.handle.openIterableDir("shaders", .{}) catch @panic("Failed to open shaders directory");
 
     var file_it = shaders_dir.iterate();
