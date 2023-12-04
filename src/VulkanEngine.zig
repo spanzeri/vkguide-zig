@@ -5,8 +5,8 @@ const vki = @import("vulkan_init.zig");
 const check_vk = vki.check_vk;
 const mesh_mod = @import("mesh.zig");
 const Mesh = mesh_mod.Mesh;
-const math3d = @import("math3d.zig");
-const Vec3 = math3d.Vec3;
+
+const m3d = @import("math3d.zig");
 
 const log = std.log.scoped(.vulkan_engine);
 
@@ -68,10 +68,16 @@ rgb_triangle_pipeline: c.VkPipeline = VK_NULL_HANDLE,
 vma_allocator: c.VmaAllocator = undefined,
 
 mesh_pipeline: c.VkPipeline = VK_NULL_HANDLE,
+mesh_pipeline_layout: c.VkPipelineLayout = VK_NULL_HANDLE,
 triangle_mesh: Mesh = undefined,
 
 deletion_queue: std.ArrayList(VulkanDeleter) = undefined,
 buffer_deletion_queue: std.ArrayList(VmaBufferDeleter) = undefined,
+
+const MeshPushConstants = struct {
+    data: m3d.Vec4,
+    render_matrix: m3d.Mat4,
+};
 
 const VulkanDeleter = struct {
     object: ?*anyopaque,
@@ -532,7 +538,7 @@ fn init_pipelines(self: *Self) void {
         log.info("Created rgb triangle pipeline", .{});
     }
 
-    // Create mesh pipeline for meshes
+    // Create pipeline for meshes
     const vertex_descritpion = mesh_mod.Vertex.vertex_input_description;
 
     pipeline_builder.vertex_input_state.pVertexAttributeDescriptions = vertex_descritpion.attributes.ptr;
@@ -544,10 +550,29 @@ fn init_pipelines(self: *Self) void {
     const tri_mesh_vert_module = create_shader_module(self, &tri_mesh_vert_code) orelse VK_NULL_HANDLE;
     defer c.vkDestroyShaderModule(self.device, tri_mesh_vert_module, vk_alloc_cbs);
 
-    if (tri_mesh_vert_module != VK_NULL_HANDLE) log.info("Vert module loaded successfully", .{});
+    if (tri_mesh_vert_module != VK_NULL_HANDLE) log.info("Tri-mesh vert module loaded successfully", .{});
 
     pipeline_builder.shader_stages[0].module = tri_mesh_vert_module;
     pipeline_builder.shader_stages[1].module = rgb_frag_module; //NOTE: Use the one above
+
+    // New layout for push constants
+    const push_constant_range = std.mem.zeroInit(c.VkPushConstantRange, .{
+        .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT,
+        .offset = 0,
+        .size = @sizeOf(MeshPushConstants),
+    });
+    const mesh_pipeline_layout_ci = std.mem.zeroInit(c.VkPipelineLayoutCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &push_constant_range,
+    });
+
+    check_vk(c.vkCreatePipelineLayout(self.device, &mesh_pipeline_layout_ci, vk_alloc_cbs, &self.mesh_pipeline_layout))
+        catch @panic("Failed to create mesh pipeline layout");
+    self.deletion_queue.append(VulkanDeleter.make(self.mesh_pipeline_layout, c.vkDestroyPipelineLayout))
+        catch @panic("Out of memory");
+
+    pipeline_builder.pipeline_layout = self.mesh_pipeline_layout;
 
     self.mesh_pipeline = pipeline_builder.build(self.device, self.render_pass);
     self.deletion_queue.append(VulkanDeleter.make(self.mesh_pipeline, c.vkDestroyPipeline)) catch @panic("Out of memory");
@@ -749,6 +774,31 @@ fn draw(self: *Self) void {
 
     const offset: c.VkDeviceSize = 0;
     c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.triangle_mesh.vertex_buffer.buffer, &offset);
+
+    // MVP matrix
+    // Projection
+    const fov = std.math.degreesToRadians(f32, 70.0);
+    const aspect =
+        @as(f32, @floatFromInt(self.swapchain_extent.width)) / @as(f32, @floatFromInt(self.swapchain_extent.height));
+    var projection = m3d.perspective(fov, aspect, 0.1, 200.0);
+    projection.j.y *= -1.0; // Flip Y coordinate
+
+    // View
+    const camera_pos = m3d.vec3(0.0, 0.0, -2.0);
+    const view = m3d.translate(m3d.Mat4.IDENTITY, camera_pos);
+
+    // Model
+    const angle = std.math.degreesToRadians(f32, @as(f32, @floatFromInt(state.frame_number)) * 0.4);
+    const model = m3d.rotation(m3d.vec3(0.0, 1.0, 0.0), angle);
+
+    const mesh_matrix = m3d.Mat4.mul(m3d.Mat4.mul(projection, view), model);
+
+    const push_constants = MeshPushConstants{
+        .data = m3d.Vec4.ZERO,
+        .render_matrix = mesh_matrix,
+    };
+
+    c.vkCmdPushConstants(cmd, self.mesh_pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(MeshPushConstants), &push_constants);
 
     c.vkCmdDraw(cmd, @as(u32, @intCast(self.triangle_mesh.vertices.len)), 1, 0, 0);
 
