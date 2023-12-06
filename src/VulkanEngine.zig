@@ -27,6 +27,7 @@ pub const AllocatedBuffer = struct {
 //
 frame_number: i32 = 0,
 selected_shader: i32 = 0,
+selected_mesh: i32 = 0,
 
 window: *c.SDL_Window = undefined,
 
@@ -70,6 +71,7 @@ vma_allocator: c.VmaAllocator = undefined,
 mesh_pipeline: c.VkPipeline = VK_NULL_HANDLE,
 mesh_pipeline_layout: c.VkPipelineLayout = VK_NULL_HANDLE,
 triangle_mesh: Mesh = undefined,
+monkey_mesh: Mesh = undefined,
 
 deletion_queue: std.ArrayList(VulkanDeleter) = undefined,
 buffer_deletion_queue: std.ArrayList(VmaBufferDeleter) = undefined,
@@ -620,6 +622,7 @@ pub fn cleanup(self: *Self) void {
     }
     self.deletion_queue.deinit();
 
+    self.allocator.free(self.monkey_mesh.vertices);
     self.allocator.free(self.triangle_mesh.vertices);
 
     self.allocator.free(self.framebuffers);
@@ -665,7 +668,10 @@ fn load_meshes(self: *Self) void {
         .vertices = vertices,
     };
 
-    upload_mesh(self, &self.triangle_mesh);
+    self.upload_mesh(&self.triangle_mesh);
+
+    self.monkey_mesh = mesh_mod.load_from_obj(self.allocator, "assets/suzanne.obj");
+    self.upload_mesh(&self.monkey_mesh);
 }
 
 fn upload_mesh(self: *Self, mesh: *Mesh) void {
@@ -711,6 +717,9 @@ pub fn run(self: *Self) void {
                 switch (event.key.keysym.scancode) {
                     c.SDL_SCANCODE_SPACE => {
                         self.selected_shader = if (self.selected_shader == 1) 0 else 1;
+                    },
+                    c.SDL_SCANCODE_M => {
+                        self.selected_mesh = if (self.selected_mesh == 1) 0 else 1;
                     },
                     else => {},
                 }
@@ -772,9 +781,6 @@ fn draw(self: *Self) void {
 
     c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.mesh_pipeline);
 
-    const offset: c.VkDeviceSize = 0;
-    c.vkCmdBindVertexBuffers(cmd, 0, 1, &self.triangle_mesh.vertex_buffer.buffer, &offset);
-
     // MVP matrix
     // Projection
     const fov = std.math.degreesToRadians(f32, 70.0);
@@ -800,7 +806,13 @@ fn draw(self: *Self) void {
 
     c.vkCmdPushConstants(cmd, self.mesh_pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(MeshPushConstants), &push_constants);
 
-    c.vkCmdDraw(cmd, @as(u32, @intCast(self.triangle_mesh.vertices.len)), 1, 0, 0);
+    // Choose mesh
+    const mesh = if (self.selected_mesh == 0) &self.monkey_mesh else &self.triangle_mesh;
+
+    const offset: c.VkDeviceSize = 0;
+    c.vkCmdBindVertexBuffers(cmd, 0, 1, &mesh.vertex_buffer.buffer, &offset);
+
+    c.vkCmdDraw(cmd, @as(u32, @intCast(mesh.vertices.len)), 1, 0, 0);
 
     c.vkCmdEndRenderPass(cmd);
     check_vk(c.vkEndCommandBuffer(cmd))
