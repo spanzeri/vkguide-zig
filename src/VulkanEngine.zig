@@ -23,6 +23,11 @@ pub const AllocatedBuffer = struct {
     allocation: c.VmaAllocation,
 };
 
+pub const AllocatedImage = struct {
+    image: c.VkImage,
+    allocation: c.VmaAllocation,
+};
+
 // Data
 //
 frame_number: i32 = 0,
@@ -58,6 +63,10 @@ main_command_buffer: c.VkCommandBuffer = VK_NULL_HANDLE,
 render_pass: c.VkRenderPass = VK_NULL_HANDLE,
 framebuffers: []c.VkFramebuffer = undefined,
 
+depth_image_view: c.VkImageView = VK_NULL_HANDLE,
+depth_image: AllocatedImage = undefined,
+depth_format: c.VkFormat = undefined,
+
 present_semaphore: c.VkSemaphore = VK_NULL_HANDLE,
 render_semaphore: c.VkSemaphore = VK_NULL_HANDLE,
 render_fence: c.VkFence = VK_NULL_HANDLE,
@@ -75,6 +84,7 @@ monkey_mesh: Mesh = undefined,
 
 deletion_queue: std.ArrayList(VulkanDeleter) = undefined,
 buffer_deletion_queue: std.ArrayList(VmaBufferDeleter) = undefined,
+image_deletion_queue: std.ArrayList(VmaImageDeleter) = undefined,
 
 const MeshPushConstants = struct {
     data: m3d.Vec4,
@@ -121,6 +131,14 @@ const VmaBufferDeleter = struct {
     }
 };
 
+const VmaImageDeleter = struct {
+    image: AllocatedImage,
+
+    fn delete(self: *VmaImageDeleter, engine: *Self) void {
+        c.vmaDestroyImage(engine.vma_allocator, self.image.image, self.image.allocation);
+    }
+};
+
 pub fn init(a: std.mem.Allocator) Self {
     check_sdl(c.SDL_Init(c.SDL_INIT_VIDEO));
 
@@ -138,6 +156,7 @@ pub fn init(a: std.mem.Allocator) Self {
         .allocator = a,
         .deletion_queue = std.ArrayList(VulkanDeleter).init(a),
         .buffer_deletion_queue = std.ArrayList(VmaBufferDeleter).init(a),
+        .image_deletion_queue = std.ArrayList(VmaImageDeleter).init(a),
     };
 
     engine.init_instance();
@@ -256,6 +275,60 @@ fn init_swapchain(self: *Self) void {
     self.deletion_queue.append(VulkanDeleter.make(swapchain.handle, c.vkDestroySwapchainKHR)) catch @panic("Out of memory");
 
     log.info("Created swapchain", .{});
+
+    // Create depth image to associate with the swapchain
+    const extent = c.VkExtent3D {
+        .width = self.swapchain_extent.width,
+        .height = self.swapchain_extent.height,
+        .depth = 1,
+    };
+
+    // Hard-coded 32-bit float depth format
+    self.depth_format = c.VK_FORMAT_D32_SFLOAT;
+
+    const depth_image_ci = std.mem.zeroInit(c.VkImageCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = c.VK_IMAGE_TYPE_2D,
+        .format = self.depth_format,
+        .extent = extent,
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = c.VK_SAMPLE_COUNT_1_BIT,
+        .tiling = c.VK_IMAGE_TILING_OPTIMAL,
+        .usage = c.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        .sharingMode = c.VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+    });
+
+    const depth_image_ai = std.mem.zeroInit(c.VmaAllocationCreateInfo, .{
+        .usage = c.VMA_MEMORY_USAGE_GPU_ONLY,
+        .requiredFlags = c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+    });
+
+    check_vk(c.vmaCreateImage(self.vma_allocator, &depth_image_ci, &depth_image_ai, &self.depth_image.image, &self.depth_image.allocation, null))
+        catch @panic("Failed to create depth image");
+
+    const depth_image_view_ci = std.mem.zeroInit(c.VkImageViewCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = self.depth_image.image,
+        .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
+        .format = self.depth_format,
+        .subresourceRange = .{
+            .aspectMask = c.VK_IMAGE_ASPECT_DEPTH_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+    });
+
+    check_vk(c.vkCreateImageView(self.device, &depth_image_view_ci, vk_alloc_cbs, &self.depth_image_view))
+        catch @panic("Failed to create depth image view");
+
+    self.deletion_queue.append(VulkanDeleter.make(self.depth_image_view, c.vkDestroyImageView)) catch @panic("Out of memory");
+    self.image_deletion_queue.append(VmaImageDeleter{ .image = self.depth_image }) catch @panic("Out of memory");
+
+    log.info("Created depth image", .{});
 }
 
 fn init_commands(self: *Self) void {
@@ -285,6 +358,7 @@ fn init_commands(self: *Self) void {
 }
 
 fn init_default_renderpass(self: *Self) void {
+    // Color attachement
     const color_attachment = std.mem.zeroInit(c.VkAttachmentDescription, .{
         .format = self.swapchain_format,
         .samples = c.VK_SAMPLE_COUNT_1_BIT,
@@ -301,18 +375,68 @@ fn init_default_renderpass(self: *Self) void {
         .layout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
     });
 
+    // Depth attachment
+    const depth_attachment = std.mem.zeroInit(c.VkAttachmentDescription, .{
+        .format = self.depth_format,
+        .samples = c.VK_SAMPLE_COUNT_1_BIT,
+        .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
+        .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
+        .stencilLoadOp = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+        .stencilStoreOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
+        .initialLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
+        .finalLayout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    });
+
+    const depth_attachement_ref = std.mem.zeroInit(c.VkAttachmentReference, .{
+        .attachment = 1,
+        .layout = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    });
+
+    // Subpass
     const subpass = std.mem.zeroInit(c.VkSubpassDescription, .{
         .pipelineBindPoint = c.VK_PIPELINE_BIND_POINT_GRAPHICS,
         .colorAttachmentCount = 1,
         .pColorAttachments = &color_attachment_ref,
+        .pDepthStencilAttachment = &depth_attachement_ref,
     });
+
+    const attachment_descriptions = [_]c.VkAttachmentDescription{
+        color_attachment,
+        depth_attachment,
+    };
+
+    // Subpass color and depth depencies
+    const color_dependency = std.mem.zeroInit(c.VkSubpassDependency, .{
+        .srcSubpass = c.VK_SUBPASS_EXTERNAL,
+        .dstSubpass = 0,
+        .srcStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .srcAccessMask = 0,
+        .dstStageMask = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .dstAccessMask = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+    });
+
+    const depth_dependency = std.mem.zeroInit(c.VkSubpassDependency, .{
+        .srcSubpass = c.VK_SUBPASS_EXTERNAL,
+        .dstSubpass = 0,
+        .srcStageMask = c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | c.VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+        .srcAccessMask = c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        .dstStageMask = c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | c.VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+        .dstAccessMask = c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+    });
+
+    const dependecies = [_]c.VkSubpassDependency{
+        color_dependency,
+        depth_dependency,
+    };
 
     const render_pass_create_info = std.mem.zeroInit(c.VkRenderPassCreateInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
-        .attachmentCount = 1,
-        .pAttachments = &color_attachment,
+        .attachmentCount = @as(u32, @intCast(attachment_descriptions.len)),
+        .pAttachments = attachment_descriptions[0..].ptr,
         .subpassCount = 1,
         .pSubpasses = &subpass,
+        .dependencyCount = @as(u32, @intCast(dependecies.len)),
+        .pDependencies = &dependecies[0],
     });
 
     check_vk(c.vkCreateRenderPass(self.device, &render_pass_create_info, vk_alloc_cbs, &self.render_pass))
@@ -326,7 +450,7 @@ fn init_framebuffers(self: *Self) void {
     var framebuffer_ci = std.mem.zeroInit(c.VkFramebufferCreateInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
         .renderPass = self.render_pass,
-        .attachmentCount = 1,
+        .attachmentCount = 2,
         .width = self.swapchain_extent.width,
         .height = self.swapchain_extent.height,
         .layers = 1,
@@ -335,7 +459,11 @@ fn init_framebuffers(self: *Self) void {
     self.framebuffers = self.allocator.alloc(c.VkFramebuffer, self.swapchain_image_views.len) catch @panic("Out of memory");
 
     for (self.swapchain_image_views, self.framebuffers) |view, *framebuffer| {
-        framebuffer_ci.pAttachments = &view;
+        const attachements = [2]c.VkImageView{
+            view,
+            self.depth_image_view,
+        };
+        framebuffer_ci.pAttachments = &attachements[0];
         check_vk(c.vkCreateFramebuffer(self.device, &framebuffer_ci, vk_alloc_cbs, framebuffer))
             catch @panic("Failed to create framebuffer");
         self.deletion_queue.append(VulkanDeleter.make(framebuffer.*, c.vkDestroyFramebuffer)) catch @panic("Out of memory");
@@ -378,6 +506,7 @@ const PipelineBuilder = struct {
     color_blend_attachment_state: c.VkPipelineColorBlendAttachmentState,
     multisample_state: c.VkPipelineMultisampleStateCreateInfo,
     pipeline_layout: c.VkPipelineLayout,
+    depth_stencil_state: c.VkPipelineDepthStencilStateCreateInfo,
 
     fn build(self: PipelineBuilder, device: c.VkDevice, render_pass: c.VkRenderPass) c.VkPipeline {
         const viewport_state = std.mem.zeroInit(c.VkPipelineViewportStateCreateInfo, .{
@@ -406,6 +535,7 @@ const PipelineBuilder = struct {
             .pRasterizationState = &self.rasterization_state,
             .pMultisampleState = &self.multisample_state,
             .pColorBlendState = &color_blend_state,
+            .pDepthStencilState = &self.depth_stencil_state,
             .layout = self.pipeline_layout,
             .renderPass = render_pass,
             .subpass = 0,
@@ -481,6 +611,17 @@ fn init_pipelines(self: *Self) void {
         .minSampleShading = 1.0,
     });
 
+    const depth_stencil_state_ci = std.mem.zeroInit(c.VkPipelineDepthStencilStateCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = c.VK_TRUE,
+        .depthWriteEnable = c.VK_TRUE,
+        .depthCompareOp = c.VK_COMPARE_OP_LESS_OR_EQUAL,
+        .depthBoundsTestEnable = c.VK_FALSE,
+        .stencilTestEnable = c.VK_FALSE,
+        .minDepthBounds = 0.0,
+        .maxDepthBounds = 1.0,
+    });
+
     const color_blend_attachment_state = std.mem.zeroInit(c.VkPipelineColorBlendAttachmentState, .{
         .colorWriteMask = c.VK_COLOR_COMPONENT_R_BIT | c.VK_COLOR_COMPONENT_G_BIT | c.VK_COLOR_COMPONENT_B_BIT | c.VK_COLOR_COMPONENT_A_BIT,
     });
@@ -509,6 +650,7 @@ fn init_pipelines(self: *Self) void {
         .color_blend_attachment_state = color_blend_attachment_state,
         .multisample_state = multisample_state_ci,
         .pipeline_layout = self.triangle_pipeline_layout,
+        .depth_stencil_state = depth_stencil_state_ci,
     };
 
     self.red_triangle_pipeline = pipeline_builder.build(self.device, self.render_pass);
@@ -617,6 +759,12 @@ pub fn cleanup(self: *Self) void {
         entry.delete(self);
     }
     self.buffer_deletion_queue.deinit();
+
+    for (self.image_deletion_queue.items) |*entry| {
+        entry.delete(self);
+    }
+    self.image_deletion_queue.deinit();
+
     for (self.deletion_queue.items) |*entry| {
         entry.delete(self);
     }
@@ -762,8 +910,20 @@ fn draw(self: *Self) void {
 
     // Make a claer color that changes with each frame (120*pi frame period)
     const color = @fabs(std.math.sin(@as(f32, @floatFromInt(state.frame_number)) / 120.0));
-    const clear_value: c.VkClearValue = .{
+    const color_clear: c.VkClearValue = .{
         .color = .{ .float32 = [_]f32{ 0.0, 0.0, color, 1.0 } },
+    };
+
+    const depth_clear = c.VkClearValue{
+        .depthStencil = .{
+            .depth = 1.0,
+            .stencil = 0,
+        },
+    };
+
+    const clear_values = [_]c.VkClearValue{
+        color_clear,
+        depth_clear,
     };
 
     const render_pass_begin_info = std.mem.zeroInit(c.VkRenderPassBeginInfo, .{
@@ -774,8 +934,8 @@ fn draw(self: *Self) void {
             .offset = .{ .x = 0, .y = 0 },
             .extent = self.swapchain_extent,
         },
-        .clearValueCount = 1,
-        .pClearValues = &clear_value,
+        .clearValueCount = @as(u32, @intCast(clear_values.len)),
+        .pClearValues = &clear_values[0],
     });
     c.vkCmdBeginRenderPass(cmd, &render_pass_begin_info, c.VK_SUBPASS_CONTENTS_INLINE);
 

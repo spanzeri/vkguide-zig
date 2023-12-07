@@ -383,9 +383,9 @@ fn add_current_object(ctx: *ParseContext) !void {
 }
 
 fn log_err(ctx: *ParseContext, comptime msg: []const u8, args: anytype) callconv(.Inline) void {
-    log.err("{s}({}): " ++ msg ++ "\nLine content: {s}",  .{ ctx.filename, ctx.line } ++ args ++ .{ ctx.line_content });
+    log.err("{s}: {}: " ++ msg ++ "\nLine content: {s}",  .{ ctx.filename, ctx.line } ++ args ++ .{ ctx.line_content });
 }
 
 fn log_warn(ctx: *ParseContext, comptime msg: []const u8, args: anytype) callconv(.Inline) void {
-    log.warn("{s}({}): " ++ msg, .{ ctx.filename, ctx.line } ++ args);
+    log.warn("{s}: {}: " ++ msg, .{ ctx.filename, ctx.line } ++ args);
 }
