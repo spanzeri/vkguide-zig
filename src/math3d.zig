@@ -7,40 +7,50 @@ pub const Vec3 = struct {
 
     const Self = @This();
 
-    fn to_point4(self: Self) callconv(.Inline) Vec4 {
+    pub const ZERO = vec3(0.0, 0.0, 0.0);
+
+    pub fn to_point4(self: Self) callconv(.Inline) Vec4 {
         return vec4(self.x, self.y, self.z, 1.0);
     }
 
-    fn to_vector4(self: Self) callconv(.Inline) Vec4 {
+    pub fn to_vector4(self: Self) callconv(.Inline) Vec4 {
         return vec4(self.x, self.y, self.z, 0.0);
     }
 
-    fn to_vec4(self: Self, w: f32) callconv(.Inline) Vec4 {
+    pub fn to_vec4(self: Self, w: f32) callconv(.Inline) Vec4 {
         return vec4(self.x, self.y, self.z, w);
     }
 
-    fn squared_norm(self: Self) callconv(.Inline) f32 {
+    pub fn square_norm(self: Self) callconv(.Inline) f32 {
         return self.x * self.x + self.y * self.y + self.z * self.z;
     }
 
-    fn norm(self: Self) f32 {
+    pub fn norm(self: Self) f32 {
         return @sqrt(self.x * self.x + self.y * self.y + self.z * self.z);
     }
 
-    fn mul(self: Self, other: f32) callconv(.Inline) Self {
+    pub fn add(self: Self, other: Self) callconv(.Inline) Self {
+        return vec3(self.x + other.x, self.y + other.y, self.z + other.z);
+    }
+
+    pub fn sub(self: Self, other: Self) callconv(.Inline) Self {
+        return vec3(self.x - other.x, self.y - other.y, self.z - other.z);
+    }
+
+    pub fn mul(self: Self, other: f32) callconv(.Inline) Self {
         return vec3(self.x * other, self.y * other, self.z * other);
     }
 
-    fn div(self: Self, other: f32) callconv(.Inline) Self {
+    pub fn div(self: Self, other: f32) callconv(.Inline) Self {
         return vec3(self.x / other, self.y / other, self.z / other);
     }
 
-    fn normalized(self: Self) callconv(.Inline) Self {
+    pub fn normalized(self: Self) callconv(.Inline) Self {
         const len = self.norm();
         return self.div(len);
     }
 
-    fn dot(a: Self, b: Self) callconv(.Inline) f32 {
+    pub fn dot(a: Self, b: Self) callconv(.Inline) f32 {
         return a.x * b.x + a.y * b.y + a.z * b.z;
     }
 };
@@ -214,5 +224,14 @@ pub fn rotation(axis: Vec3, angle_rad: f32) Mat4 {
 // OPTIMIZE: We can work out the math to create the matrix directly.
 pub fn rotate(m: Mat4, axis: Vec3, angle_rad: f32) Mat4 {
     return Mat4.mul(rotation(axis, angle_rad), m);
+}
+
+pub fn scale(v: Vec3) Mat4 {
+    return mat4(
+        vec4(v.x, 0.0, 0.0, 0.0),
+        vec4(0.0, v.y, 0.0, 0.0),
+        vec4(0.0, 0.0, v.z, 0.0),
+        vec4(0.0, 0.0, 0.0, 1.0),
+    );
 }
 

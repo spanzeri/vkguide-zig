@@ -28,6 +28,18 @@ pub const AllocatedImage = struct {
     allocation: c.VmaAllocation,
 };
 
+// Scene management
+const Material = struct {
+    pipeline: c.VkPipeline,
+    pipeline_layout: c.VkPipelineLayout,
+};
+
+const RenderObject = struct {
+    mesh: *Mesh,
+    material: *Material,
+    transform: m3d.Mat4,
+};
+
 // Data
 //
 frame_number: i32 = 0,
@@ -71,16 +83,14 @@ present_semaphore: c.VkSemaphore = VK_NULL_HANDLE,
 render_semaphore: c.VkSemaphore = VK_NULL_HANDLE,
 render_fence: c.VkFence = VK_NULL_HANDLE,
 
-triangle_pipeline_layout: c.VkPipelineLayout = VK_NULL_HANDLE,
-red_triangle_pipeline: c.VkPipeline = VK_NULL_HANDLE,
-rgb_triangle_pipeline: c.VkPipeline = VK_NULL_HANDLE,
-
 vma_allocator: c.VmaAllocator = undefined,
 
-mesh_pipeline: c.VkPipeline = VK_NULL_HANDLE,
-mesh_pipeline_layout: c.VkPipelineLayout = VK_NULL_HANDLE,
-triangle_mesh: Mesh = undefined,
-monkey_mesh: Mesh = undefined,
+renderables: std.ArrayList(RenderObject),
+materials: std.StringHashMap(Material),
+meshes: std.StringHashMap(Mesh),
+
+camera_pos: m3d.Vec3 = m3d.vec3(0.0, -3.0, -10.0),
+camera_input: m3d.Vec3 = m3d.vec3(0.0, 0.0, 0.0),
 
 deletion_queue: std.ArrayList(VulkanDeleter) = undefined,
 buffer_deletion_queue: std.ArrayList(VmaBufferDeleter) = undefined,
@@ -157,6 +167,9 @@ pub fn init(a: std.mem.Allocator) Self {
         .deletion_queue = std.ArrayList(VulkanDeleter).init(a),
         .buffer_deletion_queue = std.ArrayList(VmaBufferDeleter).init(a),
         .image_deletion_queue = std.ArrayList(VmaImageDeleter).init(a),
+        .renderables = std.ArrayList(RenderObject).init(a),
+        .materials = std.StringHashMap(Material).init(a),
+        .meshes = std.StringHashMap(Mesh).init(a),
     };
 
     engine.init_instance();
@@ -182,6 +195,7 @@ pub fn init(a: std.mem.Allocator) Self {
     engine.init_sync_structures();
     engine.init_pipelines();
     engine.load_meshes();
+    engine.init_scene();
 
     return engine;
 }
@@ -569,9 +583,10 @@ fn init_pipelines(self: *Self) void {
     const pipeline_layout_ci = std.mem.zeroInit(c.VkPipelineLayoutCreateInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
     });
-    check_vk(c.vkCreatePipelineLayout(self.device, &pipeline_layout_ci, vk_alloc_cbs, &self.triangle_pipeline_layout))
+    var triangle_pipeline_layout: c.VkPipelineLayout = undefined;
+    check_vk(c.vkCreatePipelineLayout(self.device, &pipeline_layout_ci, vk_alloc_cbs, &triangle_pipeline_layout))
         catch @panic("Failed to create pipeline layout");
-    self.deletion_queue.append(VulkanDeleter.make(self.triangle_pipeline_layout, c.vkDestroyPipelineLayout)) catch @panic("Out of memory");
+    self.deletion_queue.append(VulkanDeleter.make(triangle_pipeline_layout, c.vkDestroyPipelineLayout)) catch @panic("Out of memory");
 
     const vert_stage_ci = std.mem.zeroInit(c.VkPipelineShaderStageCreateInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -649,17 +664,20 @@ fn init_pipelines(self: *Self) void {
         .rasterization_state = rasterization_state_ci,
         .color_blend_attachment_state = color_blend_attachment_state,
         .multisample_state = multisample_state_ci,
-        .pipeline_layout = self.triangle_pipeline_layout,
+        .pipeline_layout = triangle_pipeline_layout,
         .depth_stencil_state = depth_stencil_state_ci,
     };
 
-    self.red_triangle_pipeline = pipeline_builder.build(self.device, self.render_pass);
-    self.deletion_queue.append(VulkanDeleter.make(self.red_triangle_pipeline, c.vkDestroyPipeline)) catch @panic("Out of memory");
-    if (self.red_triangle_pipeline == VK_NULL_HANDLE) {
+    const red_triangle_pipeline = pipeline_builder.build(self.device, self.render_pass);
+    self.deletion_queue.append(VulkanDeleter.make(red_triangle_pipeline, c.vkDestroyPipeline)) catch @panic("Out of memory");
+    if (red_triangle_pipeline == VK_NULL_HANDLE) {
         log.err("Failed to create red triangle pipeline", .{});
     } else {
         log.info("Created red triangle pipeline", .{});
     }
+
+    _ = self.create_material(red_triangle_pipeline, triangle_pipeline_layout, "red_triangle_mat");
+
 
     const rgb_vert_code align(4) = @embedFile("colored_triangle.vert").*;
     const rgb_frag_code align(4) = @embedFile("colored_triangle.frag").*;
@@ -674,13 +692,15 @@ fn init_pipelines(self: *Self) void {
     pipeline_builder.shader_stages[0].module = rgb_vert_module;
     pipeline_builder.shader_stages[1].module = rgb_frag_module;
 
-    self.rgb_triangle_pipeline = pipeline_builder.build(self.device, self.render_pass);
-    self.deletion_queue.append(VulkanDeleter.make(self.rgb_triangle_pipeline, c.vkDestroyPipeline)) catch @panic("Out of memory");
-    if (self.rgb_triangle_pipeline == VK_NULL_HANDLE) {
+    const rgb_triangle_pipeline = pipeline_builder.build(self.device, self.render_pass);
+    self.deletion_queue.append(VulkanDeleter.make(rgb_triangle_pipeline, c.vkDestroyPipeline)) catch @panic("Out of memory");
+    if (rgb_triangle_pipeline == VK_NULL_HANDLE) {
         log.err("Failed to create rgb triangle pipeline", .{});
     } else {
         log.info("Created rgb triangle pipeline", .{});
     }
+
+    _ = self.create_material(rgb_triangle_pipeline, triangle_pipeline_layout, "rgb_triangle_mat");
 
     // Create pipeline for meshes
     const vertex_descritpion = mesh_mod.Vertex.vertex_input_description;
@@ -711,20 +731,23 @@ fn init_pipelines(self: *Self) void {
         .pPushConstantRanges = &push_constant_range,
     });
 
-    check_vk(c.vkCreatePipelineLayout(self.device, &mesh_pipeline_layout_ci, vk_alloc_cbs, &self.mesh_pipeline_layout))
+    var mesh_pipeline_layout: c.VkPipelineLayout = undefined;
+    check_vk(c.vkCreatePipelineLayout(self.device, &mesh_pipeline_layout_ci, vk_alloc_cbs, &mesh_pipeline_layout))
         catch @panic("Failed to create mesh pipeline layout");
-    self.deletion_queue.append(VulkanDeleter.make(self.mesh_pipeline_layout, c.vkDestroyPipelineLayout))
+    self.deletion_queue.append(VulkanDeleter.make(mesh_pipeline_layout, c.vkDestroyPipelineLayout))
         catch @panic("Out of memory");
 
-    pipeline_builder.pipeline_layout = self.mesh_pipeline_layout;
+    pipeline_builder.pipeline_layout = mesh_pipeline_layout;
 
-    self.mesh_pipeline = pipeline_builder.build(self.device, self.render_pass);
-    self.deletion_queue.append(VulkanDeleter.make(self.mesh_pipeline, c.vkDestroyPipeline)) catch @panic("Out of memory");
-    if (self.mesh_pipeline == VK_NULL_HANDLE) {
+    const mesh_pipeline = pipeline_builder.build(self.device, self.render_pass);
+    self.deletion_queue.append(VulkanDeleter.make(mesh_pipeline, c.vkDestroyPipeline)) catch @panic("Out of memory");
+    if (mesh_pipeline == VK_NULL_HANDLE) {
         log.err("Failed to create mesh pipeline", .{});
     } else {
         log.info("Created mesh pipeline", .{});
     }
+
+    _ = self.create_material(mesh_pipeline, mesh_pipeline_layout, "default_mesh");
 }
 
 fn create_shader_module(self: *Self, code: []const u8) ?c.VkShaderModule {
@@ -751,9 +774,46 @@ fn create_shader_module(self: *Self, code: []const u8) ?c.VkShaderModule {
     return shader_module;
 }
 
+fn init_scene(self: *Self) void {
+    const monkey = RenderObject {
+        .mesh = self.meshes.getPtr("monkey") orelse @panic("Failed to get monkey mesh"),
+        .material = self.materials.getPtr("default_mesh") orelse @panic("Failed to get default mesh material"),
+        .transform = m3d.Mat4.IDENTITY,
+    };
+    self.renderables.append(monkey) catch @panic("Out of memory");
+
+    var x: i32 = -20;
+    while (x <= 20) : (x += 1) {
+        var y: i32 = -20;
+        while (y <= 20) : (y += 1) {
+            const translation = m3d.translation(m3d.vec3(@floatFromInt(x), 0.0, @floatFromInt(y)));
+            const scale = m3d.scale(m3d.vec3(0.2, 0.2, 0.2));
+            const transform = m3d.Mat4.mul(translation, scale);
+
+            const tri = RenderObject {
+                .mesh = self.meshes.getPtr("triangle") orelse @panic("Failed to get triangle mesh"),
+                .material = self.materials.getPtr("default_mesh") orelse @panic("Failed to get default mesh material"),
+                .transform = transform,
+            };
+
+            self.renderables.append(tri) catch @panic("Out of memory");
+        }
+    }
+}
+
 pub fn cleanup(self: *Self) void {
     check_vk(c.vkDeviceWaitIdle(self.device))
         catch @panic("Failed to wait for device idle");
+
+    // TODO: this is a horrible way to keep track of the meshes to free. Quick and dirty hack.
+    var mesh_it = self.meshes.iterator();
+    while (mesh_it.next()) |entry| {
+        self.allocator.free(entry.value_ptr.vertices);
+    }
+
+    self.meshes.deinit();
+    self.materials.deinit();
+    self.renderables.deinit();
 
     for (self.buffer_deletion_queue.items) |*entry| {
         entry.delete(self);
@@ -770,8 +830,6 @@ pub fn cleanup(self: *Self) void {
     }
     self.deletion_queue.deinit();
 
-    self.allocator.free(self.monkey_mesh.vertices);
-    self.allocator.free(self.triangle_mesh.vertices);
 
     self.allocator.free(self.framebuffers);
     self.allocator.free(self.swapchain_image_views);
@@ -812,14 +870,16 @@ fn load_meshes(self: *Self) void {
         .color = .{ .x = 0.0, .y = 1.0, .z = 0.0 }
     };
 
-    self.triangle_mesh = Mesh{
+    var triangle_mesh = Mesh{
         .vertices = vertices,
     };
 
-    self.upload_mesh(&self.triangle_mesh);
+    var monkey_mesh = mesh_mod.load_from_obj(self.allocator, "assets/suzanne.obj");
 
-    self.monkey_mesh = mesh_mod.load_from_obj(self.allocator, "assets/suzanne.obj");
-    self.upload_mesh(&self.monkey_mesh);
+    self.upload_mesh(&triangle_mesh);
+    self.upload_mesh(&monkey_mesh);
+    self.meshes.put("triangle", triangle_mesh) catch @panic("Out of memory");
+    self.meshes.put("monkey", monkey_mesh) catch @panic("Out of memory");
 }
 
 fn upload_mesh(self: *Self, mesh: *Mesh) void {
@@ -855,6 +915,9 @@ fn upload_mesh(self: *Self, mesh: *Mesh) void {
 }
 
 pub fn run(self: *Self) void {
+    var timer = std.time.Timer.start() catch @panic("Failed to start timer");
+    var delta: f32 = 0.016;
+
     var quit = false;
     var event: c.SDL_Event = undefined;
     while (!quit) {
@@ -869,12 +932,62 @@ pub fn run(self: *Self) void {
                     c.SDL_SCANCODE_M => {
                         self.selected_mesh = if (self.selected_mesh == 1) 0 else 1;
                     },
+
+                    // WASD for camera
+                    c.SDL_SCANCODE_W => {
+                        self.camera_input.z = 1.0;
+                    },
+                    c.SDL_SCANCODE_S => {
+                        self.camera_input.z = -1.0;
+                    },
+                    c.SDL_SCANCODE_A => {
+                        self.camera_input.x = 1.0;
+                    },
+                    c.SDL_SCANCODE_D => {
+                        self.camera_input.x = -1.0;
+                    },
+                    c.SDL_SCANCODE_E => {
+                        self.camera_input.y = 1.0;
+                    },
+                    c.SDL_SCANCODE_Q => {
+                        self.camera_input.y = -1.0;
+                    },
+
+                    else => {},
+                }
+            } else if (event.type == c.SDL_EVENT_KEY_UP) {
+                switch (event.key.keysym.scancode) {
+                    c.SDL_SCANCODE_W => {
+                        self.camera_input.z = 0.0;
+                    },
+                    c.SDL_SCANCODE_S => {
+                        self.camera_input.z = 0.0;
+                    },
+                    c.SDL_SCANCODE_A => {
+                        self.camera_input.x = 0.0;
+                    },
+                    c.SDL_SCANCODE_D => {
+                        self.camera_input.x = 0.0;
+                    },
+                    c.SDL_SCANCODE_E => {
+                        self.camera_input.y = 0.0;
+                    },
+                    c.SDL_SCANCODE_Q => {
+                        self.camera_input.y = 0.0;
+                    },
+
                     else => {},
                 }
             }
         }
 
+        if (self.camera_input.square_norm() > (0.1 * 0.1)) {
+            var camera_delta = self.camera_input.normalized().mul(delta * 5.0);
+            self.camera_pos = m3d.Vec3.add(self.camera_pos, camera_delta);
+        }
+
         self.draw();
+        delta = @floatCast(@as(f64, @floatFromInt(timer.lap())) / 1_000_000_000.0);
     }
 }
 
@@ -939,40 +1052,7 @@ fn draw(self: *Self) void {
     });
     c.vkCmdBeginRenderPass(cmd, &render_pass_begin_info, c.VK_SUBPASS_CONTENTS_INLINE);
 
-    c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.mesh_pipeline);
-
-    // MVP matrix
-    // Projection
-    const fov = std.math.degreesToRadians(f32, 70.0);
-    const aspect =
-        @as(f32, @floatFromInt(self.swapchain_extent.width)) / @as(f32, @floatFromInt(self.swapchain_extent.height));
-    var projection = m3d.perspective(fov, aspect, 0.1, 200.0);
-    projection.j.y *= -1.0; // Flip Y coordinate
-
-    // View
-    const camera_pos = m3d.vec3(0.0, 0.0, -2.0);
-    const view = m3d.translate(m3d.Mat4.IDENTITY, camera_pos);
-
-    // Model
-    const angle = std.math.degreesToRadians(f32, @as(f32, @floatFromInt(state.frame_number)) * 0.4);
-    const model = m3d.rotation(m3d.vec3(0.0, 1.0, 0.0), angle);
-
-    const mesh_matrix = m3d.Mat4.mul(m3d.Mat4.mul(projection, view), model);
-
-    const push_constants = MeshPushConstants{
-        .data = m3d.Vec4.ZERO,
-        .render_matrix = mesh_matrix,
-    };
-
-    c.vkCmdPushConstants(cmd, self.mesh_pipeline_layout, c.VK_SHADER_STAGE_VERTEX_BIT, 0, @sizeOf(MeshPushConstants), &push_constants);
-
-    // Choose mesh
-    const mesh = if (self.selected_mesh == 0) &self.monkey_mesh else &self.triangle_mesh;
-
-    const offset: c.VkDeviceSize = 0;
-    c.vkCmdBindVertexBuffers(cmd, 0, 1, &mesh.vertex_buffer.buffer, &offset);
-
-    c.vkCmdDraw(cmd, @as(u32, @intCast(mesh.vertices.len)), 1, 0, 0);
+    self.draw_objects(cmd, self.renderables.items);
 
     c.vkCmdEndRenderPass(cmd);
     check_vk(c.vkEndCommandBuffer(cmd))
@@ -1004,6 +1084,59 @@ fn draw(self: *Self) void {
         catch @panic("Failed to present swapchain image");
 
     state.frame_number += 1;
+}
+
+fn draw_objects(self: *Self, cmd: c.VkCommandBuffer, objects: []RenderObject) void {
+    const view = m3d.translation(self.camera_pos);
+    const aspect = @as(f32, @floatFromInt(self.swapchain_extent.width)) / @as(f32, @floatFromInt(self.swapchain_extent.height));
+    var proj = m3d.perspective(std.math.degreesToRadians(f32, 70.0), aspect, 0.1, 200.0);
+
+    proj.j.y *= -1.0;
+
+    for (objects, 0..) |object, index| {
+        if (index == 0 or object.material != objects[index - 1].material) {
+            c.vkCmdBindPipeline(
+                cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, object.material.pipeline);
+        }
+
+        const mvp = m3d.Mat4.mul(m3d.Mat4.mul(proj, view), object.transform);
+        const push_constants = MeshPushConstants{
+            .data = m3d.Vec4.ZERO,
+            .render_matrix = mvp,
+        };
+
+        c.vkCmdPushConstants(
+            cmd,
+            object.material.pipeline_layout,
+            c.VK_SHADER_STAGE_VERTEX_BIT,
+            0,
+            @sizeOf(MeshPushConstants),
+            &push_constants);
+
+        if (index == 0 or object.mesh != objects[index - 1].mesh) {
+            const offset: c.VkDeviceSize = 0;
+            c.vkCmdBindVertexBuffers(
+                cmd, 0, 1, &object.mesh.vertex_buffer.buffer, &offset);
+        }
+
+        c.vkCmdDraw(cmd, @as(u32, @intCast(object.mesh.vertices.len)), 1, 0, 0);
+    }
+}
+
+fn create_material(self: *Self, pipeline: c.VkPipeline, pipeline_layout: c.VkPipelineLayout, name: []const u8) *Material {
+    self.materials.put(name, Material{
+        .pipeline = pipeline,
+        .pipeline_layout = pipeline_layout,
+    }) catch @panic("Out of memory");
+    return self.materials.getPtr(name) orelse unreachable;
+}
+
+fn get_material(self: *Self, name: []const u8) ?*Material {
+    return self.material.getPtr(name);
+}
+
+fn get_mesh(self: *Self, name: []const u8) ?*Mesh {
+    return self.meshes.getPtr(name);
 }
 
 // Error checking for vulkan and SDL
