@@ -850,28 +850,26 @@ pub fn cleanup(self: *Self) void {
 }
 
 fn load_meshes(self: *Self) void {
-    var vertices = self.allocator.alloc(mesh_mod.Vertex, 3) catch @panic("Out of memory");
-
-    vertices[0] = .{
-        .position = .{ .x =  1.0, .y =  1.0, .z = 0.0 },
-        .normal = undefined,
-        .color = .{ .x = 0.0, .y = 1.0, .z = 0.0 }
-    };
-
-    vertices[1] = .{
-        .position = .{ .x = -1.0, .y =  1.0, .z = 0.0 },
-        .normal = undefined,
-        .color = .{ .x = 0.0, .y = 1.0, .z = 0.0 }
-    };
-
-    vertices[2] = .{
-        .position = .{ .x =  0.0, .y = -1.0, .z = 0.0 },
-        .normal = undefined,
-        .color = .{ .x = 0.0, .y = 1.0, .z = 0.0 }
+    const vertices = [_]mesh_mod.Vertex{
+        .{
+            .position = m3d.vec3(1.0, 1.0, 0.0),
+            .normal = undefined,
+            .color = m3d.vec3(0.0, 1.0, 0.0),
+        },
+        .{
+            .position = m3d.vec3(-1.0, 1.0, 0.0),
+            .normal = undefined,
+            .color = m3d.vec3(0.0, 1.0, 0.0),
+        },
+        .{
+            .position = m3d.vec3(0.0, -1.0, 0.0),
+            .normal = undefined,
+            .color = m3d.vec3(0.0, 1.0, 0.0),
+        }
     };
 
     var triangle_mesh = Mesh{
-        .vertices = vertices,
+        .vertices = self.allocator.dupe(mesh_mod.Vertex, vertices[0..]) catch @panic("Out of memory"),
     };
 
     var monkey_mesh = mesh_mod.load_from_obj(self.allocator, "assets/suzanne.obj");
@@ -882,7 +880,8 @@ fn load_meshes(self: *Self) void {
     self.meshes.put("monkey", monkey_mesh) catch @panic("Out of memory");
 }
 
-fn upload_mesh(self: *Self, mesh: *Mesh) void {
+fn 
+upload_mesh(self: *Self, mesh: *Mesh) void {
     const buffer_ci = std.mem.zeroInit(c.VkBufferCreateInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = mesh.vertices.len * @sizeOf(mesh_mod.Vertex),
@@ -988,6 +987,21 @@ pub fn run(self: *Self) void {
 
         self.draw();
         delta = @floatCast(@as(f64, @floatFromInt(timer.lap())) / 1_000_000_000.0);
+
+        const TitleDelay = struct {
+            var accumulator: f32 = 0.0;
+        };
+
+        TitleDelay.accumulator += delta;
+        if (TitleDelay.accumulator > 0.1) {
+            TitleDelay.accumulator = 0.0;
+            const fps = 1.0 / delta;
+            const new_title = std.fmt.allocPrintZ(
+                self.allocator, "Vulkan - FPS: {d:6.3}, ms: {d:6.3}", .{ fps, delta * 1000.0 }
+            ) catch @panic("Out of memory");
+            defer self.allocator.free(new_title);
+            _ = c.SDL_SetWindowTitle(self.window, new_title.ptr);
+        }
     }
 }
 
