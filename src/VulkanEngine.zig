@@ -175,7 +175,7 @@ pub fn init(a: std.mem.Allocator) Self {
     engine.init_instance();
 
     // Create the window surface
-    check_sdl_bool(c.SDL_Vulkan_CreateSurface(window, engine.instance, &engine.surface));
+    check_sdl_bool(c.SDL_Vulkan_CreateSurface(window, engine.instance, vk_alloc_cbs, &engine.surface));
 
     engine.init_device();
 
@@ -201,14 +201,9 @@ pub fn init(a: std.mem.Allocator) Self {
 }
 
 fn init_instance(self: *Self) void {
-    var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
     var sdl_required_extension_count: u32 = undefined;
-    check_sdl_bool(c.SDL_Vulkan_GetInstanceExtensions(&sdl_required_extension_count, null));
-    const sdl_required_extensions = arena.alloc([*c]const u8, sdl_required_extension_count) catch @panic("Out of memory");
-    check_sdl_bool(c.SDL_Vulkan_GetInstanceExtensions(&sdl_required_extension_count, sdl_required_extensions.ptr));
+    const sdl_extensions = c.SDL_Vulkan_GetInstanceExtensions(&sdl_required_extension_count);
+    const sdl_extension_slice = sdl_extensions[0..sdl_required_extension_count];
 
     // Instance creation and optional debug utilities
     const instance = vki.create_instance(std.heap.page_allocator, .{
@@ -218,7 +213,7 @@ fn init_instance(self: *Self) void {
         .engine_version = c.VK_MAKE_VERSION(0, 1, 0),
         .api_version = c.VK_MAKE_VERSION(1, 1, 0),
         .debug = true,
-        .required_extensions = sdl_required_extensions,
+        .required_extensions = sdl_extension_slice,
     }) catch |err| {
         log.err("Failed to create vulkan instance with error: {s}", .{ @errorName(err) });
         unreachable;

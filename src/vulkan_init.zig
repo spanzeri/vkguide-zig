@@ -13,7 +13,7 @@ pub const VkiInstanceOpts = struct {
     api_version: u32 = c.VK_MAKE_VERSION(1, 0, 0),
     debug: bool = false,
     debug_callback: c.PFN_vkDebugUtilsMessengerCallbackEXT = null,
-    required_extensions: [][*c]const u8 = &.{},
+    required_extensions: []const [*c]const u8 = &.{},
     alloc_cb: ?*c.VkAllocationCallbacks = null,
 };
 

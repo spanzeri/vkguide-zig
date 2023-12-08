@@ -10,15 +10,26 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    const vk_lib_name = if (target.getOsTag() == .windows) "vulkan-1" else "vulkan";
+
     exe.linkSystemLibrary("sdl3");
-    exe.linkSystemLibrary("vulkan");
+    exe.linkSystemLibrary(vk_lib_name);
+    exe.addLibraryPath(.{ .cwd_relative = "thirdparty/sdl3/lib" });
+    exe.addIncludePath(.{ .cwd_relative = "thirdparty/sdl3/include" });
+    if (b.env_map.get("VK_SDK_PATH")) |path| {
+        exe.addLibraryPath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/lib", .{ path }) catch @panic("OOM") });
+        exe.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include", .{ path }) catch @panic("OOM") });
+    }
     exe.addCSourceFile(.{ .file = .{ .path = "src/vk_mem_alloc.cpp" }, .flags = &.{ "" } });
     exe.addIncludePath(.{ .path = "thirdparty/vma/" });
+
     exe.linkLibCpp();
 
     compile_all_shaders(b, exe);
 
     b.installArtifact(exe);
+    b.installBinFile("thirdparty/sdl3/lib/SDL3.dll", "SDL3.dll");
 
     const run_cmd = b.addRunArtifact(exe);
 
