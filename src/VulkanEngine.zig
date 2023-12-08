@@ -40,6 +40,16 @@ const RenderObject = struct {
     transform: m3d.Mat4,
 };
 
+const FrameData = struct {
+    present_semaphore: c.VkSemaphore = VK_NULL_HANDLE,
+    render_semaphore: c.VkSemaphore = VK_NULL_HANDLE,
+    render_fence: c.VkFence = VK_NULL_HANDLE,
+    command_pool: c.VkCommandPool = VK_NULL_HANDLE,
+    main_command_buffer: c.VkCommandBuffer = VK_NULL_HANDLE,
+};
+
+const FRAME_OVERLAP = 2;
+
 // Data
 //
 frame_number: i32 = 0,
@@ -69,9 +79,6 @@ graphics_queue_family: u32 = undefined,
 present_queue: c.VkQueue = VK_NULL_HANDLE,
 present_queue_family: u32 = undefined,
 
-command_pool: c.VkCommandPool = VK_NULL_HANDLE,
-main_command_buffer: c.VkCommandBuffer = VK_NULL_HANDLE,
-
 render_pass: c.VkRenderPass = VK_NULL_HANDLE,
 framebuffers: []c.VkFramebuffer = undefined,
 
@@ -79,9 +86,7 @@ depth_image_view: c.VkImageView = VK_NULL_HANDLE,
 depth_image: AllocatedImage = undefined,
 depth_format: c.VkFormat = undefined,
 
-present_semaphore: c.VkSemaphore = VK_NULL_HANDLE,
-render_semaphore: c.VkSemaphore = VK_NULL_HANDLE,
-render_fence: c.VkFence = VK_NULL_HANDLE,
+frames: [FRAME_OVERLAP]FrameData = .{ FrameData{} } ** FRAME_OVERLAP,
 
 vma_allocator: c.VmaAllocator = undefined,
 
@@ -348,22 +353,25 @@ fn init_commands(self: *Self) void {
         .queueFamilyIndex = self.graphics_queue_family,
     });
 
-    check_vk(c.vkCreateCommandPool(self.device, &command_pool_ci, vk_alloc_cbs, &self.command_pool))
-        catch log.err("Failed to create command pool", .{});
-    self.deletion_queue.append(VulkanDeleter.make(self.command_pool, c.vkDestroyCommandPool)) catch @panic("Out of memory");
+    for (&self.frames) |*frame| {
+        check_vk(c.vkCreateCommandPool(self.device, &command_pool_ci, vk_alloc_cbs, &frame.command_pool))
+            catch log.err("Failed to create command pool", .{});
+        self.deletion_queue.append(VulkanDeleter.make(frame.command_pool, c.vkDestroyCommandPool)) catch @panic("Out of memory");
 
-    // Allocate a command buffer from the command pool
-    const command_buffer_ai = std.mem.zeroInit(c.VkCommandBufferAllocateInfo, .{
-        .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .commandPool = self.command_pool,
-        .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-        .commandBufferCount = 1,
-    });
+        // Allocate a command buffer from the command pool
+        const command_buffer_ai = std.mem.zeroInit(c.VkCommandBufferAllocateInfo, .{
+            .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+            .commandPool = frame.command_pool,
+            .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+            .commandBufferCount = 1,
+        });
 
-    check_vk(c.vkAllocateCommandBuffers(self.device, &command_buffer_ai, &self.main_command_buffer))
-        catch @panic("Failed to allocate command buffer");
+        check_vk(c.vkAllocateCommandBuffers(self.device, &command_buffer_ai, &frame.main_command_buffer))
+            catch @panic("Failed to allocate command buffer");
 
-    log.info("Created command pool and command buffer", .{});
+        log.info("Created command pool and command buffer", .{});
+    }
+
 }
 
 fn init_default_renderpass(self: *Self) void {
@@ -486,21 +494,24 @@ fn init_sync_structures(self: *Self) void {
         .sType = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
     });
 
-    check_vk(c.vkCreateSemaphore(self.device, &semaphore_ci, vk_alloc_cbs, &self.present_semaphore))
-        catch @panic("Failed to create present semaphore");
-    self.deletion_queue.append(VulkanDeleter.make(self.present_semaphore, c.vkDestroySemaphore)) catch @panic("Out of memory");
-    check_vk(c.vkCreateSemaphore(self.device, &semaphore_ci, vk_alloc_cbs, &self.render_semaphore))
-        catch @panic("Failed to create render semaphore");
-    self.deletion_queue.append(VulkanDeleter.make(self.render_semaphore, c.vkDestroySemaphore)) catch @panic("Out of memory");
-
     const fence_ci = std.mem.zeroInit(c.VkFenceCreateInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
         .flags = c.VK_FENCE_CREATE_SIGNALED_BIT,
     });
 
-    check_vk(c.vkCreateFence(self.device, &fence_ci, vk_alloc_cbs, &self.render_fence))
-        catch @panic("Failed to create render fence");
-    self.deletion_queue.append(VulkanDeleter.make(self.render_fence, c.vkDestroyFence)) catch @panic("Out of memory");
+    for (&self.frames) |*frame| {
+        check_vk(c.vkCreateSemaphore(self.device, &semaphore_ci, vk_alloc_cbs, &frame.present_semaphore))
+            catch @panic("Failed to create present semaphore");
+        self.deletion_queue.append(VulkanDeleter.make(frame.present_semaphore, c.vkDestroySemaphore)) catch @panic("Out of memory");
+        check_vk(c.vkCreateSemaphore(self.device, &semaphore_ci, vk_alloc_cbs, &frame.render_semaphore))
+            catch @panic("Failed to create render semaphore");
+        self.deletion_queue.append(VulkanDeleter.make(frame.render_semaphore, c.vkDestroySemaphore)) catch @panic("Out of memory");
+
+
+        check_vk(c.vkCreateFence(self.device, &fence_ci, vk_alloc_cbs, &frame.render_fence))
+            catch @panic("Failed to create render fence");
+        self.deletion_queue.append(VulkanDeleter.make(frame.render_fence, c.vkDestroyFence)) catch @panic("Out of memory");
+    }
 
     log.info("Created sync structures", .{});
 }
@@ -1000,23 +1011,29 @@ pub fn run(self: *Self) void {
     }
 }
 
+fn get_current_frame(self: *Self) FrameData {
+    return self.frames[@intCast(@mod(self.frame_number, FRAME_OVERLAP))];
+}
+
 fn draw(self: *Self) void {
     // Wait until the GPU has finished rendering the last frame
     const timeout: u64 = 1_000_000_000; // 1 second in nanonesconds
-    check_vk(c.vkWaitForFences(self.device, 1, &self.render_fence, c.VK_TRUE, timeout))
+    const frame = self.get_current_frame();
+
+    check_vk(c.vkWaitForFences(self.device, 1, &frame.render_fence, c.VK_TRUE, timeout))
         catch @panic("Failed to wait for render fence");
-    check_vk(c.vkResetFences(self.device, 1, &self.render_fence))
+    check_vk(c.vkResetFences(self.device, 1, &frame.render_fence))
         catch @panic("Failed to reset render fence");
 
 
     var swapchain_image_index: u32 = undefined;
-    check_vk(c.vkAcquireNextImageKHR(self.device, self.swapchain, timeout, self.present_semaphore, VK_NULL_HANDLE, &swapchain_image_index))
+    check_vk(c.vkAcquireNextImageKHR(self.device, self.swapchain, timeout, frame.present_semaphore, VK_NULL_HANDLE, &swapchain_image_index))
         catch @panic("Failed to acquire swapchain image");
 
-    check_vk(c.vkResetCommandBuffer(self.main_command_buffer, 0))
-        catch @panic("Failed to reset command buffer");
+    var cmd = frame.main_command_buffer;
 
-    var cmd = self.main_command_buffer;
+    check_vk(c.vkResetCommandBuffer(cmd, 0))
+        catch @panic("Failed to reset command buffer");
 
     const cmd_begin_info = std.mem.zeroInit(c.VkCommandBufferBeginInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
@@ -1071,20 +1088,20 @@ fn draw(self: *Self) void {
     const submit_info = std.mem.zeroInit(c.VkSubmitInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO,
         .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &self.present_semaphore,
+        .pWaitSemaphores = &frame.present_semaphore,
         .pWaitDstStageMask = &wait_stage,
         .commandBufferCount = 1,
         .pCommandBuffers = &cmd,
         .signalSemaphoreCount = 1,
-        .pSignalSemaphores = &self.render_semaphore,
+        .pSignalSemaphores = &frame.render_semaphore,
     });
-    check_vk(c.vkQueueSubmit(self.graphics_queue, 1, &submit_info, self.render_fence))
+    check_vk(c.vkQueueSubmit(self.graphics_queue, 1, &submit_info, frame.render_fence))
         catch @panic("Failed to submit to graphics queue");
 
     const present_info = std.mem.zeroInit(c.VkPresentInfoKHR, .{
         .sType = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &self.render_semaphore,
+        .pWaitSemaphores = &frame.render_semaphore,
         .swapchainCount = 1,
         .pSwapchains = &self.swapchain,
         .pImageIndices = &swapchain_image_index,
