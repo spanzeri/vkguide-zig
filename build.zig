@@ -13,7 +13,7 @@ pub fn build(b: *std.Build) void {
 
     const vk_lib_name = if (target.getOsTag() == .windows) "vulkan-1" else "vulkan";
 
-    exe.linkSystemLibrary("sdl3");
+    exe.linkSystemLibrary("SDL3");
     exe.linkSystemLibrary(vk_lib_name);
     exe.addLibraryPath(.{ .cwd_relative = "thirdparty/sdl3/lib" });
     exe.addIncludePath(.{ .cwd_relative = "thirdparty/sdl3/include" });
