@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
@@ -55,9 +56,12 @@ pub fn build(b: *std.Build) void {
 }
 
 fn compile_all_shaders(b: *std.Build, exe: *std.Build.CompileStep) void {
-    // NOTE: for 0.12.0 we need to change to this line
-    // const shaders_dir = b.build_root.handle.openDir("shaders", .{ .iterate = true }) catch @panic("Failed to open shaders directory");
-    const shaders_dir = b.build_root.handle.openIterableDir("shaders", .{}) catch @panic("Failed to open shaders directory");
+    // This is a fix for a change between zig 0.11 and 0.12
+
+    const shaders_dir = if (@hasDecl(@TypeOf(b.build_root.handle), "openIterableDir"))
+        b.build_root.handle.openIterableDir("shaders", .{}) catch @panic("Failed to open shaders directory")
+    else
+        b.build_root.handle.openDir("shaders", .{ .iterate = true }) catch @panic("Failed to open shaders directory");
 
     var file_it = shaders_dir.iterate();
     while (file_it.next() catch @panic("Failed to iterate shader directory")) |entry| {

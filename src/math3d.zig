@@ -1,5 +1,16 @@
 const std = @import("std");
 
+// FIXME: This is a temporary hack to deal with fabs being renamed abs in 0.12.0.
+// Once 0.12 is officially released, we need to remove this
+pub fn abs(f: anytype) callconv(.Inline) @TypeOf(f) {
+    const type_info = @typeInfo(@TypeOf(f));
+    if (type_info != .Float and type_info != .Int) {
+        @compileError("Expected integer or floating point type");
+    }
+
+    return if (f < 0) -f else f;
+}
+
 pub const Vec3 = struct {
     x: f32,
     y: f32,
@@ -182,7 +193,7 @@ pub fn translate(m: Mat4, v: Vec3) Mat4 {
 
 /// Creates a right handed, zero to one, perspective projection matrix.
 pub fn perspective(fovy_rad: f32, aspect: f32, near: f32, far: f32) Mat4 {
-    std.debug.assert(@fabs(aspect) > 0.0001);
+    std.debug.assert(abs(aspect) > 0.0001);
     const f = 1.0 / @tan(fovy_rad / 2.0);
 
     return mat4(
@@ -203,7 +214,7 @@ pub fn rotation(axis: Vec3, angle_rad: f32) Mat4 {
     const sqr_norm = axis.squared_norm();
     if (sqr_norm == 0.0) {
         return Mat4.IDENTITY;
-    } else if (@fabs(sqr_norm - 1.0) > 0.0001) {
+    } else if (abs(sqr_norm - 1.0) > 0.0001) {
         const norm = @sqrt(sqr_norm);
         return rotation(axis.div(norm), angle_rad);
     }

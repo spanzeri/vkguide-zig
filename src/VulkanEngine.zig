@@ -46,6 +46,15 @@ const FrameData = struct {
     render_fence: c.VkFence = VK_NULL_HANDLE,
     command_pool: c.VkCommandPool = VK_NULL_HANDLE,
     main_command_buffer: c.VkCommandBuffer = VK_NULL_HANDLE,
+
+    camera_buffer: AllocatedBuffer = .{ .buffer = VK_NULL_HANDLE, .allocation = VK_NULL_HANDLE },
+    global_descriptor_set: c.VkDescriptorSet = VK_NULL_HANDLE,
+};
+
+const GPUCameraData = struct {
+    view: m3d.Mat4,
+    proj: m3d.Mat4,
+    view_proj: m3d.Mat4,
 };
 
 const FRAME_OVERLAP = 2;
@@ -87,6 +96,9 @@ depth_image: AllocatedImage = undefined,
 depth_format: c.VkFormat = undefined,
 
 frames: [FRAME_OVERLAP]FrameData = .{ FrameData{} } ** FRAME_OVERLAP,
+
+global_set_layout: c.VkDescriptorSetLayout = VK_NULL_HANDLE,
+descriptor_pool: c.VkDescriptorPool = VK_NULL_HANDLE,
 
 vma_allocator: c.VmaAllocator = undefined,
 
@@ -198,6 +210,7 @@ pub fn init(a: std.mem.Allocator) Self {
     engine.init_default_renderpass();
     engine.init_framebuffers();
     engine.init_sync_structures();
+    engine.init_descriptors();
     engine.init_pipelines();
     engine.load_meshes();
     engine.init_scene();
@@ -733,6 +746,8 @@ fn init_pipelines(self: *Self) void {
     });
     const mesh_pipeline_layout_ci = std.mem.zeroInit(c.VkPipelineLayoutCreateInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &self.global_set_layout,
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &push_constant_range,
     });
@@ -754,6 +769,84 @@ fn init_pipelines(self: *Self) void {
     }
 
     _ = self.create_material(mesh_pipeline, mesh_pipeline_layout, "default_mesh");
+}
+
+fn init_descriptors(self: *Self) void {
+    // Descriptor pool
+    const pool_sizes = [_]c.VkDescriptorPoolSize{
+        .{ .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 10, },
+    };
+
+    const pool_ci = std.mem.zeroInit(c.VkDescriptorPoolCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .flags = 0,
+        .maxSets = 10,
+        .poolSizeCount = @as(u32, @intCast(pool_sizes.len)),
+        .pPoolSizes = &pool_sizes[0],
+    });
+
+    check_vk(c.vkCreateDescriptorPool(self.device, &pool_ci, vk_alloc_cbs, &self.descriptor_pool))
+        catch @panic("Failed to create descriptor pool");
+
+    self.deletion_queue.append(VulkanDeleter.make(self.descriptor_pool, c.vkDestroyDescriptorPool)) catch @panic("Out of memory");
+
+    // Information about the binding
+    const camera_buffer_binding = std.mem.zeroInit(c.VkDescriptorSetLayoutBinding, .{
+        .binding = 0,
+        .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT,
+    });
+
+    const set_ci = std.mem.zeroInit(c.VkDescriptorSetLayoutCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .flags = 0,
+        .bindingCount = 1,
+        .pBindings = &camera_buffer_binding,
+    });
+
+    check_vk(c.vkCreateDescriptorSetLayout(self.device, &set_ci, vk_alloc_cbs, &self.global_set_layout))
+        catch @panic("Failed to create global descriptor set layout");
+
+    log.info("Created descriptor set layout for camera", .{});
+
+    self.deletion_queue.append(VulkanDeleter.make(self.global_set_layout, c.vkDestroyDescriptorSetLayout)) catch @panic("Out of memory");
+
+    for (0..FRAME_OVERLAP) |i| {
+        self.frames[i].camera_buffer = self.create_buffer(
+            @sizeOf(GPUCameraData),
+            c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            c.VMA_MEMORY_USAGE_CPU_TO_GPU);
+        self.buffer_deletion_queue.append(VmaBufferDeleter{ .buffer = self.frames[i].camera_buffer }) catch @panic("Out of memory");
+
+        const alloc_info = std.mem.zeroInit(c.VkDescriptorSetAllocateInfo, .{
+            .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool = self.descriptor_pool,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &self.global_set_layout,
+        });
+
+        // We now have allocated the buffer, but we need to connect it to the descriptor.
+        check_vk(c.vkAllocateDescriptorSets(self.device, &alloc_info, &self.frames[i].global_descriptor_set))
+            catch @panic("Failed to allocate global descriptor set");
+
+        const descritor_buffer_info = std.mem.zeroInit(c.VkDescriptorBufferInfo, .{
+            .buffer = self.frames[i].camera_buffer.buffer,
+            .offset = 0,
+            .range = @sizeOf(GPUCameraData),
+        });
+
+        const write = std.mem.zeroInit(c.VkWriteDescriptorSet, .{
+            .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = self.frames[i].global_descriptor_set,
+            .dstBinding = 0,
+            .descriptorCount = 1,
+            .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            .pBufferInfo = &descritor_buffer_info,
+        });
+
+        c.vkUpdateDescriptorSets(self.device, 1, &write, 0, null);
+    }
 }
 
 fn create_shader_module(self: *Self, code: []const u8) ?c.VkShaderModule {
@@ -987,7 +1080,7 @@ pub fn run(self: *Self) void {
         }
 
         if (self.camera_input.square_norm() > (0.1 * 0.1)) {
-            var camera_delta = self.camera_input.normalized().mul(delta * 5.0);
+            const camera_delta = self.camera_input.normalized().mul(delta * 5.0);
             self.camera_pos = m3d.Vec3.add(self.camera_pos, camera_delta);
         }
 
@@ -1048,7 +1141,9 @@ fn draw(self: *Self) void {
     };
 
     // Make a claer color that changes with each frame (120*pi frame period)
-    const color = @fabs(std.math.sin(@as(f32, @floatFromInt(state.frame_number)) / 120.0));
+    // 0.11 and 0.12 fix for change in fabs
+    const color = m3d.abs(std.math.sin(@as(f32, @floatFromInt(state.frame_number)) / 120.0));
+
     const color_clear: c.VkClearValue = .{
         .color = .{ .float32 = [_]f32{ 0.0, 0.0, color, 1.0 } },
     };
@@ -1119,16 +1214,40 @@ fn draw_objects(self: *Self, cmd: c.VkCommandBuffer, objects: []RenderObject) vo
 
     proj.j.y *= -1.0;
 
+    // Create and bind the camera buffer
+    const camera_data = GPUCameraData{
+        .view = view,
+        .proj = proj,
+        .view_proj = proj.mul(view),
+    };
+
+    // TODO: meta function that deals with alignment and copying of data with
+    // map/unmap. We now have two versions, one for a single pointer to struct
+    // and one for array/slices (used to copy mesh vertices).
+    var data: ?*align(@alignOf(GPUCameraData)) anyopaque = undefined;
+    check_vk(c.vmaMapMemory(self.vma_allocator, self.get_current_frame().camera_buffer.allocation, &data))
+        catch @panic("Failed to map camera buffer");
+    @as([*]GPUCameraData, @ptrCast(data))[0] = camera_data;
+    c.vmaUnmapMemory(self.vma_allocator, self.get_current_frame().camera_buffer.allocation);
+
     for (objects, 0..) |object, index| {
         if (index == 0 or object.material != objects[index - 1].material) {
             c.vkCmdBindPipeline(
                 cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, object.material.pipeline);
+            c.vkCmdBindDescriptorSets(
+                cmd,
+                c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                object.material.pipeline_layout,
+                0,
+                1,
+                &self.get_current_frame().global_descriptor_set,
+                0,
+                null);
         }
 
-        const mvp = m3d.Mat4.mul(m3d.Mat4.mul(proj, view), object.transform);
         const push_constants = MeshPushConstants{
             .data = m3d.Vec4.ZERO,
-            .render_matrix = mvp,
+            .render_matrix = object.transform,
         };
 
         c.vkCmdPushConstants(
@@ -1163,6 +1282,29 @@ fn get_material(self: *Self, name: []const u8) ?*Material {
 
 fn get_mesh(self: *Self, name: []const u8) ?*Mesh {
     return self.meshes.getPtr(name);
+}
+
+fn create_buffer(self: *Self, alloc_size: usize, usage: c.VkBufferUsageFlags, memory_usage: c.VmaMemoryUsage) AllocatedBuffer {
+    const buffer_ci = std.mem.zeroInit(c.VkBufferCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = alloc_size,
+        .usage = usage,
+    });
+
+    const vma_alloc_info = std.mem.zeroInit(c.VmaAllocationCreateInfo, .{
+        .usage = memory_usage,
+    });
+
+    var buffer: AllocatedBuffer = undefined;
+    check_vk(c.vmaCreateBuffer(
+        self.vma_allocator,
+        &buffer_ci,
+        &vma_alloc_info,
+        &buffer.buffer,
+        &buffer.allocation,
+        null)) catch @panic("Failed to create buffer");
+
+    return buffer;
 }
 
 // Error checking for vulkan and SDL
