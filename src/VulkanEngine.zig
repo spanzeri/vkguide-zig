@@ -51,7 +51,9 @@ const FrameData = struct {
     main_command_buffer: c.VkCommandBuffer = VK_NULL_HANDLE,
 
     camera_buffer: AllocatedBuffer = .{ .buffer = VK_NULL_HANDLE, .allocation = VK_NULL_HANDLE },
+    object_buffer: AllocatedBuffer = .{ .buffer = VK_NULL_HANDLE, .allocation = VK_NULL_HANDLE },
     global_descriptor_set: c.VkDescriptorSet = VK_NULL_HANDLE,
+    object_descriptor_set: c.VkDescriptorSet = VK_NULL_HANDLE,
 };
 
 const GPUCameraData = struct {
@@ -66,6 +68,10 @@ const GPUSceneData = struct {
     ambient_color: Vec4,
     sunlight_dir: Vec4,
     sunlight_color: Vec4,
+};
+
+const GPUObjectData = struct {
+    model_matrix: Mat4,
 };
 
 const FRAME_OVERLAP = 2;
@@ -116,6 +122,7 @@ scene_parameters: GPUSceneData = undefined,
 scene_parameters_buffer: AllocatedBuffer = undefined,
 
 global_set_layout: c.VkDescriptorSetLayout = VK_NULL_HANDLE,
+object_set_layout: c.VkDescriptorSetLayout = VK_NULL_HANDLE,
 descriptor_pool: c.VkDescriptorPool = VK_NULL_HANDLE,
 
 vma_allocator: c.VmaAllocator = undefined,
@@ -264,6 +271,7 @@ fn init_device(self: *Self) void {
     const required_device_extensions: []const [*c]const u8 = &.{
         "VK_KHR_swapchain",
     };
+
     const physical_device = vki.select_physical_device(std.heap.page_allocator, self.instance, .{
         .min_api_version = c.VK_MAKE_VERSION(1, 1, 0),
         .required_extensions = required_device_extensions,
@@ -282,11 +290,17 @@ fn init_device(self: *Self) void {
     self.graphics_queue_family = physical_device.graphics_queue_family;
     self.present_queue_family = physical_device.present_queue_family;
 
+    const shader_draw_parameters_features = std.mem.zeroInit(c.VkPhysicalDeviceShaderDrawParametersFeatures, .{
+        .sType = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES,
+        .shaderDrawParameters = c.VK_TRUE,
+    });
+
     // Create a logical device
     const device = vki.create_logical_device(self.allocator, .{
         .physical_device = physical_device,
         .features = std.mem.zeroInit(c.VkPhysicalDeviceFeatures, .{}),
-        .alloc_cb = vk_alloc_cbs
+        .alloc_cb = vk_alloc_cbs,
+        .pnext = &shader_draw_parameters_features,
     }) catch @panic("Failed to create logical device");
 
     self.device = device.handle;
@@ -773,10 +787,16 @@ fn init_pipelines(self: *Self) void {
         .offset = 0,
         .size = @sizeOf(MeshPushConstants),
     });
+
+    const set_layouts = [_]c.VkDescriptorSetLayout{
+        self.global_set_layout,
+        self.object_set_layout,
+    };
+
     const mesh_pipeline_layout_ci = std.mem.zeroInit(c.VkPipelineLayoutCreateInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-        .setLayoutCount = 1,
-        .pSetLayouts = &self.global_set_layout,
+        .setLayoutCount = @as(u32, @intCast(set_layouts.len)),
+        .pSetLayouts = &set_layouts[0],
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &push_constant_range,
     });
@@ -805,6 +825,7 @@ fn init_descriptors(self: *Self) void {
     const pool_sizes = [_]c.VkDescriptorPoolSize{
         .{ .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 10, },
         .{ .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, .descriptorCount = 10, },
+        .{ .type = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 10, },
     };
 
     const pool_ci = std.mem.zeroInit(c.VkDescriptorPoolCreateInfo, .{
@@ -823,6 +844,10 @@ fn init_descriptors(self: *Self) void {
     // =========================================================================
     // Information about the binding
     // =========================================================================
+
+    // =================================
+    // Global set layout
+    //
 
     // Camera binding
     const camera_buffer_binding = std.mem.zeroInit(c.VkDescriptorSetLayoutBinding, .{
@@ -845,19 +870,43 @@ fn init_descriptors(self: *Self) void {
         scene_parameters_binding,
     };
 
-    const set_ci = std.mem.zeroInit(c.VkDescriptorSetLayoutCreateInfo, .{
+    const global_set_ci = std.mem.zeroInit(c.VkDescriptorSetLayoutCreateInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .flags = 0,
         .bindingCount = @as(u32, @intCast(bindings.len)),
         .pBindings = &bindings[0],
     });
 
-    check_vk(c.vkCreateDescriptorSetLayout(self.device, &set_ci, vk_alloc_cbs, &self.global_set_layout))
+    check_vk(c.vkCreateDescriptorSetLayout(self.device, &global_set_ci, vk_alloc_cbs, &self.global_set_layout))
         catch @panic("Failed to create global descriptor set layout");
 
-    log.info("Created descriptor set layout for camera", .{});
-
     self.deletion_queue.append(VulkanDeleter.make(self.global_set_layout, c.vkDestroyDescriptorSetLayout)) catch @panic("Out of memory");
+
+    log.info("Created global set layout", .{});
+
+    // =================================
+    // Object set layout
+    //
+
+    // Object buffer binding
+    const object_buffer_binding = std.mem.zeroInit(c.VkDescriptorSetLayoutBinding, .{
+        .binding = 0,
+        .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT,
+    });
+
+    const object_set_ci = std.mem.zeroInit(c.VkDescriptorSetLayoutCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindings = &object_buffer_binding,
+    });
+
+    check_vk(c.vkCreateDescriptorSetLayout(self.device, &object_set_ci, vk_alloc_cbs, &self.object_set_layout))
+        catch @panic("Failed to create object descriptor set layout");
+
+    self.deletion_queue.append(VulkanDeleter.make(self.object_set_layout, c.vkDestroyDescriptorSetLayout)) catch @panic("Out of memory");
+
+    log.info("Created object set layout", .{});
 
     // Scene params buffers
     // Only one buffer and we get multiple offset of of it
@@ -869,14 +918,12 @@ fn init_descriptors(self: *Self) void {
     self.buffer_deletion_queue.append(VmaBufferDeleter{ .buffer = self.scene_parameters_buffer }) catch @panic("Out of memory");
 
     for (0..FRAME_OVERLAP) |i| {
-        // Multiple camera buffers
-        self.frames[i].camera_buffer = self.create_buffer(
-            @sizeOf(GPUCameraData),
-            c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            c.VMA_MEMORY_USAGE_CPU_TO_GPU);
-        self.buffer_deletion_queue.append(VmaBufferDeleter{ .buffer = self.frames[i].camera_buffer }) catch @panic("Out of memory");
+        // ======================================================================
+        // Allocate descriptor sets
+        // ======================================================================
 
-        const alloc_info = std.mem.zeroInit(c.VkDescriptorSetAllocateInfo, .{
+        // Global descriptor set
+        const global_set_alloc_info = std.mem.zeroInit(c.VkDescriptorSetAllocateInfo, .{
             .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
             .descriptorPool = self.descriptor_pool,
             .descriptorSetCount = 1,
@@ -884,21 +931,52 @@ fn init_descriptors(self: *Self) void {
         });
 
         // We now have allocated the buffer, but we need to connect it to the descriptor.
-        check_vk(c.vkAllocateDescriptorSets(self.device, &alloc_info, &self.frames[i].global_descriptor_set))
+        check_vk(c.vkAllocateDescriptorSets(self.device, &global_set_alloc_info, &self.frames[i].global_descriptor_set))
             catch @panic("Failed to allocate global descriptor set");
+
+        // Object descriptor set
+        const object_set_alloc_info = std.mem.zeroInit(c.VkDescriptorSetAllocateInfo, .{
+            .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool = self.descriptor_pool,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &self.object_set_layout,
+        });
+
+        check_vk(c.vkAllocateDescriptorSets(self.device, &object_set_alloc_info, &self.frames[i].object_descriptor_set))
+            catch @panic("Failed to allocate object descriptor set");
+
+        // ======================================================================
+        // Buffer allocations
+        // ======================================================================
+
+        // Multiple camera buffers
+        self.frames[i].camera_buffer = self.create_buffer(
+            @sizeOf(GPUCameraData),
+            c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+            c.VMA_MEMORY_USAGE_CPU_TO_GPU);
+        self.buffer_deletion_queue.append(VmaBufferDeleter{ .buffer = self.frames[i].camera_buffer }) catch @panic("Out of memory");
+
+        // Object buffer
+        const MAX_OBJECTS = 10000;
+        self.frames[i].object_buffer = self.create_buffer(
+            MAX_OBJECTS * @sizeOf(GPUObjectData),
+            c.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+            c.VMA_MEMORY_USAGE_CPU_TO_GPU);
+        self.buffer_deletion_queue.append(VmaBufferDeleter{ .buffer = self.frames[i].object_buffer }) catch @panic("Out of memory");
 
         // ======================================================================
         // Write descriptors
         // ======================================================================
+
+        // =============================
+        // Global descriptor set
+        //
+
+        // Camera
         const camera_buffer_info = std.mem.zeroInit(c.VkDescriptorBufferInfo, .{
             .buffer = self.frames[i].camera_buffer.buffer,
             .offset = 0,
             .range = @sizeOf(GPUCameraData),
-        });
-
-        const scene_parameters_buffer_info = std.mem.zeroInit(c.VkDescriptorBufferInfo, .{
-            .buffer = self.scene_parameters_buffer.buffer,
-            .range = @sizeOf(GPUSceneData),
         });
 
         const camera_write = std.mem.zeroInit(c.VkWriteDescriptorSet, .{
@@ -910,6 +988,12 @@ fn init_descriptors(self: *Self) void {
             .pBufferInfo = &camera_buffer_info,
         });
 
+        // Scene parameters
+        const scene_parameters_buffer_info = std.mem.zeroInit(c.VkDescriptorBufferInfo, .{
+            .buffer = self.scene_parameters_buffer.buffer,
+            .range = @sizeOf(GPUSceneData),
+        });
+
         const scene_parameters_write = std.mem.zeroInit(c.VkWriteDescriptorSet, .{
             .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .dstSet = self.frames[i].global_descriptor_set,
@@ -919,14 +1003,32 @@ fn init_descriptors(self: *Self) void {
             .pBufferInfo = &scene_parameters_buffer_info,
         });
 
+        // =============================
+        // Object descriptor set
+        //
+        const object_buffer_info = std.mem.zeroInit(c.VkDescriptorBufferInfo, .{
+            .buffer = self.frames[i].object_buffer.buffer,
+            .offset = 0,
+            .range = MAX_OBJECTS * @sizeOf(GPUObjectData),
+        });
+
+        const object_buffer_write = std.mem.zeroInit(c.VkWriteDescriptorSet, .{
+            .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = self.frames[i].object_descriptor_set,
+            .dstBinding = 0,
+            .descriptorCount = 1,
+            .descriptorType = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+            .pBufferInfo = &object_buffer_info,
+        });
+
         const writes = [_]c.VkWriteDescriptorSet{
             camera_write,
             scene_parameters_write,
+            object_buffer_write,
         };
 
         c.vkUpdateDescriptorSets(self.device, @as(u32, @intCast(writes.len)), &writes[0], 0, null);
     }
-
 }
 
 fn create_shader_module(self: *Self, code: []const u8) ?c.VkShaderModule {
@@ -1318,6 +1420,23 @@ fn draw_objects(self: *Self, cmd: c.VkCommandBuffer, objects: []RenderObject) vo
     curr_scene_data.ambient_color = m3d.vec3(@sin(framed), 0.0, @cos(framed)).to_point4();
     c.vmaUnmapMemory(self.vma_allocator, self.scene_parameters_buffer.allocation);
 
+    // NOTE: In this copy I do conversion. Now, this is generally unsafe as none
+    // of the structures involved are c compatible (marked extern). However, we
+    // so happen to know it is safe to do so for Mat4.
+    // TODO: In the future we should mark all the math structure as extern, so
+    // we can more easily pass them back and forth from C and do those kind of
+    // conversions.
+    var object_data: ?*align(@alignOf(GPUObjectData)) anyopaque = undefined;
+    check_vk(c.vmaMapMemory(self.vma_allocator, self.get_current_frame().object_buffer.allocation, &object_data))
+        catch @panic("Failed to map object buffer");
+    var object_data_arr: [*]GPUObjectData = @ptrCast(object_data orelse unreachable);
+    for (objects, 0..) |object, index| {
+        object_data_arr[index] = GPUObjectData{
+            .model_matrix = object.transform,
+        };
+    }
+    c.vmaUnmapMemory(self.vma_allocator, self.get_current_frame().object_buffer.allocation);
+
     for (objects, 0..) |object, index| {
         if (index == 0 or object.material != objects[index - 1].material) {
             c.vkCmdBindPipeline(
@@ -1336,6 +1455,16 @@ fn draw_objects(self: *Self, cmd: c.VkCommandBuffer, objects: []RenderObject) vo
                 &self.get_current_frame().global_descriptor_set,
                 1,
                 &uniform_offset);
+
+            c.vkCmdBindDescriptorSets(
+                cmd,
+                c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                object.material.pipeline_layout,
+                1,
+                1,
+                &self.get_current_frame().object_descriptor_set,
+                0,
+                null);
         }
 
         const push_constants = MeshPushConstants{
@@ -1357,7 +1486,7 @@ fn draw_objects(self: *Self, cmd: c.VkCommandBuffer, objects: []RenderObject) vo
                 cmd, 0, 1, &object.mesh.vertex_buffer.buffer, &offset);
         }
 
-        c.vkCmdDraw(cmd, @as(u32, @intCast(object.mesh.vertices.len)), 1, 0, 0);
+        c.vkCmdDraw(cmd, @as(u32, @intCast(object.mesh.vertices.len)), 1, 0, @intCast(index));
     }
 }
 

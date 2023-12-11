@@ -227,6 +227,8 @@ const DeviceCreateOpts = struct {
     features: c.VkPhysicalDeviceFeatures = undefined,
     /// The logical device allocation callbacks.
     alloc_cb: ?*const c.VkAllocationCallbacks = null,
+    /// Optional pnext chain for VkDeviceCreateInfo.
+    pnext: ?*const anyopaque = null,
 };
 
 /// Result from the creation of a logical device.
@@ -277,6 +279,7 @@ pub fn create_logical_device(
 
     const device_info = std.mem.zeroInit(c.VkDeviceCreateInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .pNext = opts.pnext,
         .queueCreateInfoCount = @as(u32, @intCast(queue_create_infos.items.len)),
         .pQueueCreateInfos = queue_create_infos.items.ptr,
         .enabledLayerCount = 0,
