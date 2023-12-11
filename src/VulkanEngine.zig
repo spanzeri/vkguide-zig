@@ -7,6 +7,9 @@ const mesh_mod = @import("mesh.zig");
 const Mesh = mesh_mod.Mesh;
 
 const m3d = @import("math3d.zig");
+const Mat4 = m3d.Mat4;
+const Vec3 = m3d.Vec3;
+const Vec4 = m3d.Vec4;
 
 const log = std.log.scoped(.vulkan_engine);
 
@@ -37,7 +40,7 @@ const Material = struct {
 const RenderObject = struct {
     mesh: *Mesh,
     material: *Material,
-    transform: m3d.Mat4,
+    transform: Mat4,
 };
 
 const FrameData = struct {
@@ -52,9 +55,17 @@ const FrameData = struct {
 };
 
 const GPUCameraData = struct {
-    view: m3d.Mat4,
-    proj: m3d.Mat4,
-    view_proj: m3d.Mat4,
+    view: Mat4,
+    proj: Mat4,
+    view_proj: Mat4,
+};
+
+const GPUSceneData = struct {
+    fog_color: Vec4,
+    fog_distance: Vec4, // x = start, y = end
+    ambient_color: Vec4,
+    sunlight_dir: Vec4,
+    sunlight_color: Vec4,
 };
 
 const FRAME_OVERLAP = 2;
@@ -73,9 +84,13 @@ allocator: std.mem.Allocator = undefined,
 // Vulkan data
 instance: c.VkInstance = VK_NULL_HANDLE,
 debug_messenger: c.VkDebugUtilsMessengerEXT = VK_NULL_HANDLE,
+
 physical_device: c.VkPhysicalDevice = VK_NULL_HANDLE,
+physical_device_properties: c.VkPhysicalDeviceProperties = undefined,
+
 device: c.VkDevice = VK_NULL_HANDLE,
 surface: c.VkSurfaceKHR = VK_NULL_HANDLE,
+
 
 swapchain: c.VkSwapchainKHR = VK_NULL_HANDLE,
 swapchain_format: c.VkFormat = undefined,
@@ -97,6 +112,9 @@ depth_format: c.VkFormat = undefined,
 
 frames: [FRAME_OVERLAP]FrameData = .{ FrameData{} } ** FRAME_OVERLAP,
 
+scene_parameters: GPUSceneData = undefined,
+scene_parameters_buffer: AllocatedBuffer = undefined,
+
 global_set_layout: c.VkDescriptorSetLayout = VK_NULL_HANDLE,
 descriptor_pool: c.VkDescriptorPool = VK_NULL_HANDLE,
 
@@ -106,16 +124,16 @@ renderables: std.ArrayList(RenderObject),
 materials: std.StringHashMap(Material),
 meshes: std.StringHashMap(Mesh),
 
-camera_pos: m3d.Vec3 = m3d.vec3(0.0, -3.0, -10.0),
-camera_input: m3d.Vec3 = m3d.vec3(0.0, 0.0, 0.0),
+camera_pos: Vec3 = m3d.vec3(0.0, -3.0, -10.0),
+camera_input: Vec3 = m3d.vec3(0.0, 0.0, 0.0),
 
 deletion_queue: std.ArrayList(VulkanDeleter) = undefined,
 buffer_deletion_queue: std.ArrayList(VmaBufferDeleter) = undefined,
 image_deletion_queue: std.ArrayList(VmaImageDeleter) = undefined,
 
 const MeshPushConstants = struct {
-    data: m3d.Vec4,
-    render_matrix: m3d.Mat4,
+    data: Vec4,
+    render_matrix: Mat4,
 };
 
 const VulkanDeleter = struct {
@@ -257,6 +275,10 @@ fn init_device(self: *Self) void {
     };
 
     self.physical_device = physical_device.handle;
+    self.physical_device_properties = physical_device.properties;
+
+    log.info("The GPU has a minimum buffer alignment of {} bytes", .{ physical_device.properties.limits.minUniformBufferOffsetAlignment });
+
     self.graphics_queue_family = physical_device.graphics_queue_family;
     self.present_queue_family = physical_device.present_queue_family;
 
@@ -735,8 +757,15 @@ fn init_pipelines(self: *Self) void {
 
     if (tri_mesh_vert_module != VK_NULL_HANDLE) log.info("Tri-mesh vert module loaded successfully", .{});
 
+    // Default lit shader
+    const default_lit_frag_code align(4) = @embedFile("default_lit.frag").*;
+    const default_lit_frag_module = create_shader_module(self, &default_lit_frag_code) orelse VK_NULL_HANDLE;
+    defer c.vkDestroyShaderModule(self.device, default_lit_frag_module, vk_alloc_cbs);
+
+    if (default_lit_frag_module != VK_NULL_HANDLE) log.info("Default lit frag module loaded successfully", .{});
+
     pipeline_builder.shader_stages[0].module = tri_mesh_vert_module;
-    pipeline_builder.shader_stages[1].module = rgb_frag_module; //NOTE: Use the one above
+    pipeline_builder.shader_stages[1].module = default_lit_frag_module;
 
     // New layout for push constants
     const push_constant_range = std.mem.zeroInit(c.VkPushConstantRange, .{
@@ -775,6 +804,7 @@ fn init_descriptors(self: *Self) void {
     // Descriptor pool
     const pool_sizes = [_]c.VkDescriptorPoolSize{
         .{ .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 10, },
+        .{ .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, .descriptorCount = 10, },
     };
 
     const pool_ci = std.mem.zeroInit(c.VkDescriptorPoolCreateInfo, .{
@@ -790,7 +820,11 @@ fn init_descriptors(self: *Self) void {
 
     self.deletion_queue.append(VulkanDeleter.make(self.descriptor_pool, c.vkDestroyDescriptorPool)) catch @panic("Out of memory");
 
+    // =========================================================================
     // Information about the binding
+    // =========================================================================
+
+    // Camera binding
     const camera_buffer_binding = std.mem.zeroInit(c.VkDescriptorSetLayoutBinding, .{
         .binding = 0,
         .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -798,11 +832,24 @@ fn init_descriptors(self: *Self) void {
         .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT,
     });
 
+    // Scene param binding
+    const scene_parameters_binding = std.mem.zeroInit(c.VkDescriptorSetLayoutBinding, .{
+        .binding = 1,
+        .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+        .descriptorCount = 1,
+        .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT,
+    });
+
+    const bindings = [_]c.VkDescriptorSetLayoutBinding{
+        camera_buffer_binding,
+        scene_parameters_binding,
+    };
+
     const set_ci = std.mem.zeroInit(c.VkDescriptorSetLayoutCreateInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .flags = 0,
-        .bindingCount = 1,
-        .pBindings = &camera_buffer_binding,
+        .bindingCount = @as(u32, @intCast(bindings.len)),
+        .pBindings = &bindings[0],
     });
 
     check_vk(c.vkCreateDescriptorSetLayout(self.device, &set_ci, vk_alloc_cbs, &self.global_set_layout))
@@ -812,7 +859,17 @@ fn init_descriptors(self: *Self) void {
 
     self.deletion_queue.append(VulkanDeleter.make(self.global_set_layout, c.vkDestroyDescriptorSetLayout)) catch @panic("Out of memory");
 
+    // Scene params buffers
+    // Only one buffer and we get multiple offset of of it
+    const scene_params_buffer_size = FRAME_OVERLAP * self.pad_uniform_buffer_size(@sizeOf(GPUSceneData));
+    self.scene_parameters_buffer = self.create_buffer(
+        scene_params_buffer_size,
+        c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        c.VMA_MEMORY_USAGE_CPU_TO_GPU);
+    self.buffer_deletion_queue.append(VmaBufferDeleter{ .buffer = self.scene_parameters_buffer }) catch @panic("Out of memory");
+
     for (0..FRAME_OVERLAP) |i| {
+        // Multiple camera buffers
         self.frames[i].camera_buffer = self.create_buffer(
             @sizeOf(GPUCameraData),
             c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
@@ -830,23 +887,46 @@ fn init_descriptors(self: *Self) void {
         check_vk(c.vkAllocateDescriptorSets(self.device, &alloc_info, &self.frames[i].global_descriptor_set))
             catch @panic("Failed to allocate global descriptor set");
 
-        const descritor_buffer_info = std.mem.zeroInit(c.VkDescriptorBufferInfo, .{
+        // ======================================================================
+        // Write descriptors
+        // ======================================================================
+        const camera_buffer_info = std.mem.zeroInit(c.VkDescriptorBufferInfo, .{
             .buffer = self.frames[i].camera_buffer.buffer,
             .offset = 0,
             .range = @sizeOf(GPUCameraData),
         });
 
-        const write = std.mem.zeroInit(c.VkWriteDescriptorSet, .{
+        const scene_parameters_buffer_info = std.mem.zeroInit(c.VkDescriptorBufferInfo, .{
+            .buffer = self.scene_parameters_buffer.buffer,
+            .range = @sizeOf(GPUSceneData),
+        });
+
+        const camera_write = std.mem.zeroInit(c.VkWriteDescriptorSet, .{
             .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
             .dstSet = self.frames[i].global_descriptor_set,
             .dstBinding = 0,
             .descriptorCount = 1,
             .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .pBufferInfo = &descritor_buffer_info,
+            .pBufferInfo = &camera_buffer_info,
         });
 
-        c.vkUpdateDescriptorSets(self.device, 1, &write, 0, null);
+        const scene_parameters_write = std.mem.zeroInit(c.VkWriteDescriptorSet, .{
+            .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = self.frames[i].global_descriptor_set,
+            .dstBinding = 1,
+            .descriptorCount = 1,
+            .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+            .pBufferInfo = &scene_parameters_buffer_info,
+        });
+
+        const writes = [_]c.VkWriteDescriptorSet{
+            camera_write,
+            scene_parameters_write,
+        };
+
+        c.vkUpdateDescriptorSets(self.device, @as(u32, @intCast(writes.len)), &writes[0], 0, null);
     }
+
 }
 
 fn create_shader_module(self: *Self, code: []const u8) ?c.VkShaderModule {
@@ -877,7 +957,7 @@ fn init_scene(self: *Self) void {
     const monkey = RenderObject {
         .mesh = self.meshes.getPtr("monkey") orelse @panic("Failed to get monkey mesh"),
         .material = self.materials.getPtr("default_mesh") orelse @panic("Failed to get default mesh material"),
-        .transform = m3d.Mat4.IDENTITY,
+        .transform = Mat4.IDENTITY,
     };
     self.renderables.append(monkey) catch @panic("Out of memory");
 
@@ -887,7 +967,7 @@ fn init_scene(self: *Self) void {
         while (y <= 20) : (y += 1) {
             const translation = m3d.translation(m3d.vec3(@floatFromInt(x), 0.0, @floatFromInt(y)));
             const scale = m3d.scale(m3d.vec3(0.2, 0.2, 0.2));
-            const transform = m3d.Mat4.mul(translation, scale);
+            const transform = Mat4.mul(translation, scale);
 
             const tri = RenderObject {
                 .mesh = self.meshes.getPtr("triangle") orelse @panic("Failed to get triangle mesh"),
@@ -1081,7 +1161,7 @@ pub fn run(self: *Self) void {
 
         if (self.camera_input.square_norm() > (0.1 * 0.1)) {
             const camera_delta = self.camera_input.normalized().mul(delta * 5.0);
-            self.camera_pos = m3d.Vec3.add(self.camera_pos, camera_delta);
+            self.camera_pos = Vec3.add(self.camera_pos, camera_delta);
         }
 
         self.draw();
@@ -1136,13 +1216,9 @@ fn draw(self: *Self) void {
     check_vk(c.vkBeginCommandBuffer(cmd, &cmd_begin_info))
         catch @panic("Failed to begin command buffer");
 
-    const state = struct {
-        var frame_number: u32 = 0;
-    };
-
     // Make a claer color that changes with each frame (120*pi frame period)
     // 0.11 and 0.12 fix for change in fabs
-    const color = m3d.abs(std.math.sin(@as(f32, @floatFromInt(state.frame_number)) / 120.0));
+    const color = m3d.abs(std.math.sin(@as(f32, @floatFromInt(self.frame_number)) / 120.0));
 
     const color_clear: c.VkClearValue = .{
         .color = .{ .float32 = [_]f32{ 0.0, 0.0, color, 1.0 } },
@@ -1204,7 +1280,7 @@ fn draw(self: *Self) void {
     check_vk(c.vkQueuePresentKHR(self.present_queue, &present_info))
         catch @panic("Failed to present swapchain image");
 
-    state.frame_number += 1;
+    self.frame_number +%= 1;
 }
 
 fn draw_objects(self: *Self, cmd: c.VkCommandBuffer, objects: []RenderObject) void {
@@ -1230,10 +1306,27 @@ fn draw_objects(self: *Self, cmd: c.VkCommandBuffer, objects: []RenderObject) vo
     @as([*]GPUCameraData, @ptrCast(data))[0] = camera_data;
     c.vmaUnmapMemory(self.vma_allocator, self.get_current_frame().camera_buffer.allocation);
 
+    // Write scene parameters data
+    var scene_data: ?*align(@alignOf(GPUSceneData)) anyopaque = undefined;
+    check_vk(c.vmaMapMemory(self.vma_allocator, self.scene_parameters_buffer.allocation, &scene_data))
+        catch @panic("Failed to map scene parameters buffer");
+    const frame_index: usize = @intCast(@mod(self.frame_number, FRAME_OVERLAP));
+    const curr_scene_data: *GPUSceneData = @ptrFromInt(
+        @intFromPtr(scene_data orelse unreachable) +
+        self.pad_uniform_buffer_size(@sizeOf(GPUSceneData)) * frame_index);
+    const framed = @as(f32, @floatFromInt(self.frame_number)) / 120.0;
+    curr_scene_data.ambient_color = m3d.vec3(@sin(framed), 0.0, @cos(framed)).to_point4();
+    c.vmaUnmapMemory(self.vma_allocator, self.scene_parameters_buffer.allocation);
+
     for (objects, 0..) |object, index| {
         if (index == 0 or object.material != objects[index - 1].material) {
             c.vkCmdBindPipeline(
                 cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, object.material.pipeline);
+
+            // Compute the offset for dynamic uniform buffers (for now just the one containing scene data, the
+            // camera data is not dynamic)
+            const uniform_offset: u32 = @as(u32, @intCast(frame_index * self.pad_uniform_buffer_size(@sizeOf(GPUSceneData))));
+
             c.vkCmdBindDescriptorSets(
                 cmd,
                 c.VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -1241,12 +1334,12 @@ fn draw_objects(self: *Self, cmd: c.VkCommandBuffer, objects: []RenderObject) vo
                 0,
                 1,
                 &self.get_current_frame().global_descriptor_set,
-                0,
-                null);
+                1,
+                &uniform_offset);
         }
 
         const push_constants = MeshPushConstants{
-            .data = m3d.Vec4.ZERO,
+            .data = Vec4.ZERO,
             .render_matrix = object.transform,
         };
 
@@ -1305,6 +1398,12 @@ fn create_buffer(self: *Self, alloc_size: usize, usage: c.VkBufferUsageFlags, me
         null)) catch @panic("Failed to create buffer");
 
     return buffer;
+}
+
+fn pad_uniform_buffer_size(self: *Self, original_size: usize) usize {
+    const min_ubo_alignment = @as(usize, @intCast(self.physical_device_properties.limits.minUniformBufferOffsetAlignment));
+    const aligned_size = (original_size + min_ubo_alignment - 1) & ~(min_ubo_alignment - 1);
+    return aligned_size;
 }
 
 // Error checking for vulkan and SDL

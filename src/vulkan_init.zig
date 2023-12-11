@@ -157,7 +157,7 @@ pub const PhysicalDevice = struct {
     /// The selected physical device.
     handle: c.VkPhysicalDevice = null,
     /// The selected physical device properties.
-    props: c.VkPhysicalDeviceProperties = undefined,
+    properties: c.VkPhysicalDeviceProperties = undefined,
     /// Queue family indices.
     graphics_queue_family: u32 = undefined,
     present_queue_family: u32 = undefined,
@@ -198,7 +198,7 @@ pub fn select_physical_device(
             break;
         }
 
-        if (pd.props.deviceType == c.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
+        if (pd.properties.deviceType == c.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
             suitable_pd = pd;
             break;
         } else if (suitable_pd == null) {
@@ -212,7 +212,7 @@ pub fn select_physical_device(
     }
     const res = suitable_pd.?;
 
-    const device_name = @as([*:0]const u8, @ptrCast(@alignCast(res.props.deviceName[0..])));
+    const device_name = @as([*:0]const u8, @ptrCast(@alignCast(res.properties.deviceName[0..])));
     log.info("Selected physical device: {s}", .{ device_name });
 
     return res;
@@ -518,7 +518,7 @@ fn make_physical_device(
 
     return .{
         .handle = device,
-        .props = props,
+        .properties = props,
         .graphics_queue_family = graphics_queue_family,
         .present_queue_family = present_queue_family,
         .compute_queue_family = compute_queue_family,
@@ -527,7 +527,7 @@ fn make_physical_device(
 }
 
 fn is_physical_device_suitable(a: std.mem.Allocator, device: PhysicalDevice, opts: PhysicalDeviceSelectOpts) !bool {
-    if (device.props.apiVersion < opts.min_api_version) {
+    if (device.properties.apiVersion < opts.min_api_version) {
         return false;
     }
 
