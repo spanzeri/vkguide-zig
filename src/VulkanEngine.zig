@@ -50,9 +50,7 @@ const FrameData = struct {
     command_pool: c.VkCommandPool = VK_NULL_HANDLE,
     main_command_buffer: c.VkCommandBuffer = VK_NULL_HANDLE,
 
-    camera_buffer: AllocatedBuffer = .{ .buffer = VK_NULL_HANDLE, .allocation = VK_NULL_HANDLE },
     object_buffer: AllocatedBuffer = .{ .buffer = VK_NULL_HANDLE, .allocation = VK_NULL_HANDLE },
-    global_descriptor_set: c.VkDescriptorSet = VK_NULL_HANDLE,
     object_descriptor_set: c.VkDescriptorSet = VK_NULL_HANDLE,
 };
 
@@ -118,8 +116,8 @@ depth_format: c.VkFormat = undefined,
 
 frames: [FRAME_OVERLAP]FrameData = .{ FrameData{} } ** FRAME_OVERLAP,
 
-scene_parameters: GPUSceneData = undefined,
-scene_parameters_buffer: AllocatedBuffer = undefined,
+camera_and_scene_set: c.VkDescriptorSet = VK_NULL_HANDLE,
+camera_and_scene_buffer: AllocatedBuffer = undefined,
 
 global_set_layout: c.VkDescriptorSetLayout = VK_NULL_HANDLE,
 object_set_layout: c.VkDescriptorSetLayout = VK_NULL_HANDLE,
@@ -852,7 +850,7 @@ fn init_descriptors(self: *Self) void {
     // Camera binding
     const camera_buffer_binding = std.mem.zeroInit(c.VkDescriptorSetLayoutBinding, .{
         .binding = 0,
-        .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
         .descriptorCount = 1,
         .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT,
     });
@@ -908,31 +906,72 @@ fn init_descriptors(self: *Self) void {
 
     log.info("Created object set layout", .{});
 
-    // Scene params buffers
+    // Scene and camera (per-frame) in a single buffer
     // Only one buffer and we get multiple offset of of it
-    const scene_params_buffer_size = FRAME_OVERLAP * self.pad_uniform_buffer_size(@sizeOf(GPUSceneData));
-    self.scene_parameters_buffer = self.create_buffer(
-        scene_params_buffer_size,
+    const camera_and_scene_buffer_size =
+        FRAME_OVERLAP * self.pad_uniform_buffer_size(@sizeOf(GPUCameraData)) +
+        FRAME_OVERLAP * self.pad_uniform_buffer_size(@sizeOf(GPUSceneData));
+
+    self.camera_and_scene_buffer = self.create_buffer(
+        camera_and_scene_buffer_size,
         c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
         c.VMA_MEMORY_USAGE_CPU_TO_GPU);
-    self.buffer_deletion_queue.append(VmaBufferDeleter{ .buffer = self.scene_parameters_buffer }) catch @panic("Out of memory");
+    self.buffer_deletion_queue.append(VmaBufferDeleter{ .buffer = self.camera_and_scene_buffer }) catch @panic("Out of memory");
+
+    // Camera and scene descriptor set
+    const global_set_alloc_info = std.mem.zeroInit(c.VkDescriptorSetAllocateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = self.descriptor_pool,
+        .descriptorSetCount = 1,
+        .pSetLayouts = &self.global_set_layout,
+    });
+
+    // Allocate a single set for multiple frame worth of camera and scene data
+    check_vk(c.vkAllocateDescriptorSets(self.device, &global_set_alloc_info, &self.camera_and_scene_set))
+        catch @panic("Failed to allocate global descriptor set");
+
+    // Camera
+    const camera_buffer_info = std.mem.zeroInit(c.VkDescriptorBufferInfo, .{
+        .buffer = self.camera_and_scene_buffer.buffer,
+        .range = @sizeOf(GPUCameraData),
+    });
+
+    const camera_write = std.mem.zeroInit(c.VkWriteDescriptorSet, .{
+        .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = self.camera_and_scene_set,
+        .dstBinding = 0,
+        .descriptorCount = 1,
+        .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+        .pBufferInfo = &camera_buffer_info,
+    });
+
+    // Scene parameters
+    const scene_parameters_buffer_info = std.mem.zeroInit(c.VkDescriptorBufferInfo, .{
+        .buffer = self.camera_and_scene_buffer.buffer,
+        .range = @sizeOf(GPUSceneData),
+    });
+
+    const scene_parameters_write = std.mem.zeroInit(c.VkWriteDescriptorSet, .{
+        .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = self.camera_and_scene_set,
+        .dstBinding = 1,
+        .descriptorCount = 1,
+        .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+        .pBufferInfo = &scene_parameters_buffer_info,
+    });
+
+    const camera_and_scene_writes = [_]c.VkWriteDescriptorSet {
+        camera_write,
+        scene_parameters_write,
+    };
+
+    c.vkUpdateDescriptorSets(
+        self.device, @as(u32, @intCast(camera_and_scene_writes.len)), &camera_and_scene_writes[0], 0, null);
 
     for (0..FRAME_OVERLAP) |i| {
         // ======================================================================
         // Allocate descriptor sets
         // ======================================================================
-
-        // Global descriptor set
-        const global_set_alloc_info = std.mem.zeroInit(c.VkDescriptorSetAllocateInfo, .{
-            .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-            .descriptorPool = self.descriptor_pool,
-            .descriptorSetCount = 1,
-            .pSetLayouts = &self.global_set_layout,
-        });
-
-        // We now have allocated the buffer, but we need to connect it to the descriptor.
-        check_vk(c.vkAllocateDescriptorSets(self.device, &global_set_alloc_info, &self.frames[i].global_descriptor_set))
-            catch @panic("Failed to allocate global descriptor set");
 
         // Object descriptor set
         const object_set_alloc_info = std.mem.zeroInit(c.VkDescriptorSetAllocateInfo, .{
@@ -949,13 +988,6 @@ fn init_descriptors(self: *Self) void {
         // Buffer allocations
         // ======================================================================
 
-        // Multiple camera buffers
-        self.frames[i].camera_buffer = self.create_buffer(
-            @sizeOf(GPUCameraData),
-            c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            c.VMA_MEMORY_USAGE_CPU_TO_GPU);
-        self.buffer_deletion_queue.append(VmaBufferDeleter{ .buffer = self.frames[i].camera_buffer }) catch @panic("Out of memory");
-
         // Object buffer
         const MAX_OBJECTS = 10000;
         self.frames[i].object_buffer = self.create_buffer(
@@ -967,41 +999,6 @@ fn init_descriptors(self: *Self) void {
         // ======================================================================
         // Write descriptors
         // ======================================================================
-
-        // =============================
-        // Global descriptor set
-        //
-
-        // Camera
-        const camera_buffer_info = std.mem.zeroInit(c.VkDescriptorBufferInfo, .{
-            .buffer = self.frames[i].camera_buffer.buffer,
-            .offset = 0,
-            .range = @sizeOf(GPUCameraData),
-        });
-
-        const camera_write = std.mem.zeroInit(c.VkWriteDescriptorSet, .{
-            .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = self.frames[i].global_descriptor_set,
-            .dstBinding = 0,
-            .descriptorCount = 1,
-            .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-            .pBufferInfo = &camera_buffer_info,
-        });
-
-        // Scene parameters
-        const scene_parameters_buffer_info = std.mem.zeroInit(c.VkDescriptorBufferInfo, .{
-            .buffer = self.scene_parameters_buffer.buffer,
-            .range = @sizeOf(GPUSceneData),
-        });
-
-        const scene_parameters_write = std.mem.zeroInit(c.VkWriteDescriptorSet, .{
-            .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-            .dstSet = self.frames[i].global_descriptor_set,
-            .dstBinding = 1,
-            .descriptorCount = 1,
-            .descriptorType = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-            .pBufferInfo = &scene_parameters_buffer_info,
-        });
 
         // =============================
         // Object descriptor set
@@ -1022,8 +1019,6 @@ fn init_descriptors(self: *Self) void {
         });
 
         const writes = [_]c.VkWriteDescriptorSet{
-            camera_write,
-            scene_parameters_write,
             object_buffer_write,
         };
 
@@ -1393,32 +1388,35 @@ fn draw_objects(self: *Self, cmd: c.VkCommandBuffer, objects: []RenderObject) vo
     proj.j.y *= -1.0;
 
     // Create and bind the camera buffer
-    const camera_data = GPUCameraData{
+    const curr_camera_data = GPUCameraData{
         .view = view,
         .proj = proj,
         .view_proj = proj.mul(view),
     };
 
+    const frame_index: usize = @intCast(@mod(self.frame_number, FRAME_OVERLAP));
+
     // TODO: meta function that deals with alignment and copying of data with
     // map/unmap. We now have two versions, one for a single pointer to struct
     // and one for array/slices (used to copy mesh vertices).
-    var data: ?*align(@alignOf(GPUCameraData)) anyopaque = undefined;
-    check_vk(c.vmaMapMemory(self.vma_allocator, self.get_current_frame().camera_buffer.allocation, &data))
-        catch @panic("Failed to map camera buffer");
-    @as([*]GPUCameraData, @ptrCast(data))[0] = camera_data;
-    c.vmaUnmapMemory(self.vma_allocator, self.get_current_frame().camera_buffer.allocation);
+    const padded_camera_data_size = self.pad_uniform_buffer_size(@sizeOf(GPUCameraData));
+    const scene_data_base_offset = padded_camera_data_size * FRAME_OVERLAP;
+    const padded_scene_data_size = self.pad_uniform_buffer_size(@sizeOf(GPUSceneData));
 
-    // Write scene parameters data
-    var scene_data: ?*align(@alignOf(GPUSceneData)) anyopaque = undefined;
-    check_vk(c.vmaMapMemory(self.vma_allocator, self.scene_parameters_buffer.allocation, &scene_data))
-        catch @panic("Failed to map scene parameters buffer");
-    const frame_index: usize = @intCast(@mod(self.frame_number, FRAME_OVERLAP));
-    const curr_scene_data: *GPUSceneData = @ptrFromInt(
-        @intFromPtr(scene_data orelse unreachable) +
-        self.pad_uniform_buffer_size(@sizeOf(GPUSceneData)) * frame_index);
+    const camera_data_offset = padded_camera_data_size * frame_index;
+    const scene_data_offset = scene_data_base_offset + padded_scene_data_size * frame_index;
+
+    var data: ?*align(@alignOf(GPUCameraData)) anyopaque = undefined;
+    check_vk(c.vmaMapMemory(self.vma_allocator, self.camera_and_scene_buffer.allocation, &data))
+        catch @panic("Failed to map camera buffer");
+
+    const camera_data: *GPUCameraData = @ptrFromInt(@intFromPtr(data) + camera_data_offset);
+    const scene_data: *GPUSceneData = @ptrFromInt(@intFromPtr(data) + scene_data_offset);
+    camera_data.* = curr_camera_data;
     const framed = @as(f32, @floatFromInt(self.frame_number)) / 120.0;
-    curr_scene_data.ambient_color = m3d.vec3(@sin(framed), 0.0, @cos(framed)).to_point4();
-    c.vmaUnmapMemory(self.vma_allocator, self.scene_parameters_buffer.allocation);
+    scene_data.ambient_color = m3d.vec3(@sin(framed), 0.0, @cos(framed)).to_point4();
+
+    c.vmaUnmapMemory(self.vma_allocator, self.camera_and_scene_buffer.allocation);
 
     // NOTE: In this copy I do conversion. Now, this is generally unsafe as none
     // of the structures involved are c compatible (marked extern). However, we
@@ -1444,7 +1442,10 @@ fn draw_objects(self: *Self, cmd: c.VkCommandBuffer, objects: []RenderObject) vo
 
             // Compute the offset for dynamic uniform buffers (for now just the one containing scene data, the
             // camera data is not dynamic)
-            const uniform_offset: u32 = @as(u32, @intCast(frame_index * self.pad_uniform_buffer_size(@sizeOf(GPUSceneData))));
+            const uniform_offsets = [_]u32{
+                @as(u32, @intCast(camera_data_offset)),
+                @as(u32, @intCast(scene_data_offset)),
+            };
 
             c.vkCmdBindDescriptorSets(
                 cmd,
@@ -1452,9 +1453,9 @@ fn draw_objects(self: *Self, cmd: c.VkCommandBuffer, objects: []RenderObject) vo
                 object.material.pipeline_layout,
                 0,
                 1,
-                &self.get_current_frame().global_descriptor_set,
-                1,
-                &uniform_offset);
+                &self.camera_and_scene_set,
+                @as(u32, @intCast(uniform_offsets.len)),
+                &uniform_offsets[0]);
 
             c.vkCmdBindDescriptorSets(
                 cmd,
