@@ -73,8 +73,8 @@ pub fn load_from_obj(a: std.mem.Allocator, filepath: []const u8) Mesh {
 
             for (0..face_vx_count) |vx_index| {
                 const obj_index = object.indices[index_count];
-                const pos = object.vertices[obj_index.vertex];
-                const nml = object.normals[obj_index.normal];
+                const pos = obj_mesh.vertices[obj_index.vertex];
+                const nml = obj_mesh.normals[obj_index.normal];
 
                 const vx = Vertex{
                     .position = m3d.vec3(pos[0], pos[1], pos[2]),

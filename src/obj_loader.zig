@@ -26,9 +26,6 @@ pub const Index = struct {
 
 pub const Object = struct {
     name: []const u8,
-    vertices: [][3]f32,
-    normals: [][3]f32,
-    uvs: [][2]f32,
     face_vertices: []u32,
     indices: []Index,
 };
@@ -37,17 +34,21 @@ pub const Mesh = struct {
     allocator: std.mem.Allocator,
     objects: []Object,
 
+    vertices: [][3]f32,
+    normals: [][3]f32,
+    uvs: [][2]f32,
+
     pub fn deinit(self: *@This()) void {
         for (self.objects) |object| {
             self.allocator.free(object.name);
-            self.allocator.free(object.vertices);
-            self.allocator.free(object.normals);
-            self.allocator.free(object.uvs);
             self.allocator.free(object.face_vertices);
             self.allocator.free(object.indices);
         }
 
         self.allocator.free(self.objects);
+        self.allocator.free(self.vertices);
+        self.allocator.free(self.normals);
+        self.allocator.free(self.uvs);
     }
 };
 
@@ -75,26 +76,6 @@ const ParseContext = struct {
     face_vertices: std.ArrayListUnmanaged(u32) = std.ArrayListUnmanaged(u32){},
     indeces: std.ArrayListUnmanaged(Index) = std.ArrayListUnmanaged(Index){},
     face_parsing_state: FaceParsingState = .undefined,
-
-    vertex_count_at_start_of_face: usize = 0,
-    normal_count_at_start_of_face: usize = 0,
-    uv_count_at_start_of_face: usize = 0,
-
-    fn end_object(self: *ParseContext) void {
-        self.vertex_count_at_start_of_face = self.vertices.items.len;
-        self.normal_count_at_start_of_face = self.normals.items.len;
-        self.uv_count_at_start_of_face = self.uvs.items.len;
-    }
-
-    fn start_object(self: *ParseContext) !void {
-        // Obj is 1 indexed
-        self.vertices.shrinkRetainingCapacity(0);
-        self.normals.shrinkRetainingCapacity(0);
-        self.uvs.shrinkRetainingCapacity(0);
-        try self.vertices.append(self.allocator, .{0, 0, 0});
-        try self.normals.append(self.allocator, .{0, 0, 0});
-        try self.uvs.append(self.allocator, .{0, 0});
-    }
 
     fn deinit(self: *ParseContext) void {
         self.temp_alloc.deinit();
@@ -127,10 +108,13 @@ pub fn parse_file(a: std.mem.Allocator, filepath: []const u8) !Mesh {
         .filename = filepath,
     };
 
+    try ctx.vertices.append(ctx.allocator, .{0, 0, 0});
+    try ctx.normals.append(ctx.allocator, .{0, 0, 0});
+    try ctx.uvs.append(ctx.allocator, .{0, 0});
+
     const file_content = try file.readToEndAlloc(ctx.temp_alloc, file_size);
     defer ctx.temp_alloc.free(file_content);
 
-    try ctx.start_object();
     try parse_content(&ctx, file_content);
 
     // Make sure the last object is added
@@ -139,6 +123,10 @@ pub fn parse_file(a: std.mem.Allocator, filepath: []const u8) !Mesh {
     return Mesh{
         .allocator = a,
         .objects = try ctx.objects.toOwnedSlice(a),
+
+        .vertices = try ctx.vertices.toOwnedSlice(a),
+        .normals = try ctx.normals.toOwnedSlice(a),
+        .uvs = try ctx.uvs.toOwnedSlice(a),
     };
 }
 
@@ -181,6 +169,14 @@ fn parse_content(ctx: *ParseContext, content: []const u8) !void {
             'm' => {
                 if (std.mem.startsWith(u8, line, "mtllib")) {
                     try parse_material(ctx, line);
+                } else {
+                    log_err(ctx, "Unknown token at beginning of line: {s}", .{ line });
+                    return ParseError.invalid_token;
+                }
+            },
+            'u' => {
+                if (std.mem.startsWith(u8, line, "usemtl")) {
+                    log_warn(ctx, "Use materials not supported yet", .{});
                 } else {
                     log_err(ctx, "Unknown token at beginning of line: {s}", .{ line });
                     return ParseError.invalid_token;
@@ -318,26 +314,29 @@ fn parse_face(ctx: *ParseContext, line: []const u8) callconv(.Inline) !void {
 
         if (pos_index < 0) {
             pos_index = @as(i32, @intCast(ctx.vertices.items.len)) + pos_index;
-            if (pos_index < ctx.vertex_count_at_start_of_face) {
-                log_err(ctx, "Invalid face. Position index out of bounds: {s}", .{ pos });
-                return ParseError.invalid_index;
-            }
+        }
+        if (pos_index < 0 or pos_index >= ctx.vertices.items.len) {
+            log_err(ctx, "Invalid face. Position index out of bounds: {s}. Index: {}, Expected between: [0, {}]",
+                .{ pos, pos_index, ctx.vertices.items.len - 1 });
+            return ParseError.invalid_index;
         }
 
         if (uv_index < 0) {
             uv_index = @as(i32, @intCast(ctx.uvs.items.len)) + uv_index;
-            if (uv_index < ctx.uv_count_at_start_of_face) {
-                log_err(ctx, "Invalid face. UV index out of bounds: {s}", .{ uv });
-                return ParseError.invalid_index;
-            }
+        }
+        if (uv_index < 0 or uv_index >= ctx.uvs.items.len) {
+            log_err(ctx, "Invalid face. UV index out of bounds: {s}. Index: {}, Expected between: [0, {}]",
+                .{ uv, uv_index, ctx.uvs.items.len - 1 });
+            return ParseError.invalid_index;
         }
 
         if (norm_index < 0) {
             norm_index = @as(i32, @intCast(ctx.normals.items.len)) + norm_index;
-            if (norm_index < ctx.normal_count_at_start_of_face) {
-                log_err(ctx, "Invalid face. Normal index out of bounds: {s}", .{ norm });
-                return ParseError.invalid_index;
-            }
+        }
+        if (norm_index < 0 or norm_index >= ctx.normals.items.len) {
+            log_err(ctx, "Invalid face. Normal index out of bounds: {s}. Index: {}, Expected between: [0, {}]",
+                .{ norm, norm_index, ctx.normals.items.len - 1 });
+            return ParseError.invalid_index;
         }
 
         const index = Index{
@@ -359,7 +358,6 @@ fn parse_face(ctx: *ParseContext, line: []const u8) callconv(.Inline) !void {
 
 fn parse_object(ctx: *ParseContext, line: []const u8) callconv(.Inline) !void {
     try add_current_object(ctx);
-    try ctx.start_object();
     ctx.object_name = std.mem.trim(u8, line, " \t\r");
 }
 
@@ -370,12 +368,8 @@ fn parse_material(ctx: *ParseContext, line: []const u8) callconv(.Inline) !void 
 
 fn add_current_object(ctx: *ParseContext) !void {
     if (ctx.face_vertices.items.len > 0) {
-        ctx.end_object();
         try ctx.objects.append(ctx.allocator, .{
             .name = try ctx.allocator.dupe(u8, ctx.object_name),
-            .vertices = try ctx.vertices.toOwnedSlice(ctx.allocator),
-            .normals = try ctx.normals.toOwnedSlice(ctx.allocator),
-            .uvs = try ctx.uvs.toOwnedSlice(ctx.allocator),
             .face_vertices = try ctx.face_vertices.toOwnedSlice(ctx.allocator),
             .indices = try ctx.indeces.toOwnedSlice(ctx.allocator),
         });

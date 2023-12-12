@@ -1,0 +1,10 @@
+assets/body_male_realistic.mtl filter=lfs diff=lfs merge=lfs -text
+assets/body_male_realistic.obj filter=lfs diff=lfs merge=lfs -text
+assets/suzanne.mtl filter=lfs diff=lfs merge=lfs -text
+assets/suzanne_and_torus.obj filter=lfs diff=lfs merge=lfs -text
+assets/suzanne.obj filter=lfs diff=lfs merge=lfs -text
+assets/cube_diorama.mtl filter=lfs diff=lfs merge=lfs -text
+assets/cube_diorama.obj filter=lfs diff=lfs merge=lfs -text
+assets/poly_test.mtl filter=lfs diff=lfs merge=lfs -text
+assets/poly_test.obj filter=lfs diff=lfs merge=lfs -text
+assets/suzanne_and_torus.mtl filter=lfs diff=lfs merge=lfs -text

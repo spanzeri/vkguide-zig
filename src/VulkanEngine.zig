@@ -1058,6 +1058,32 @@ fn init_scene(self: *Self) void {
     };
     self.renderables.append(monkey) catch @panic("Out of memory");
 
+    const diorama = RenderObject {
+        .mesh = self.meshes.getPtr("diorama") orelse @panic("Failed to get diorama mesh"),
+        .material = self.materials.getPtr("default_mesh") orelse @panic("Failed to get default mesh material"),
+        .transform = Mat4.mul(
+            Mat4.mul(
+                m3d.translation(m3d.vec3(3.0, 1, 0)),
+                m3d.rotation(m3d.vec3(0, 1, 0), std.math.degreesToRadians(f32, -60)),
+            ),
+            m3d.scale(m3d.vec3(2.0, 2.0, 2.0))
+        ),
+    };
+    self.renderables.append(diorama) catch @panic("Out of memory");
+
+    const body = RenderObject {
+        .mesh = self.meshes.getPtr("body") orelse @panic("Failed to get body mesh"),
+        .material = self.materials.getPtr("default_mesh") orelse @panic("Failed to get default mesh material"),
+        .transform = Mat4.mul(
+            Mat4.mul(
+                m3d.translation(m3d.vec3(-3.0, -0.5, 0)),
+                m3d.rotation(m3d.vec3(0, 1, 0), std.math.degreesToRadians(f32, 45)),
+            ),
+            m3d.scale(m3d.vec3(2.0, 2.0, 2.0))
+        ),
+    };
+    self.renderables.append(body) catch @panic("Out of memory");
+
     var x: i32 = -20;
     while (x <= 20) : (x += 1) {
         var y: i32 = -20;
@@ -1149,15 +1175,20 @@ fn load_meshes(self: *Self) void {
     };
 
     var monkey_mesh = mesh_mod.load_from_obj(self.allocator, "assets/suzanne.obj");
+    var cube_diorama = mesh_mod.load_from_obj(self.allocator, "assets/cube_diorama.obj");
+    var body = mesh_mod.load_from_obj(self.allocator, "assets/body_male_realistic.obj");
 
     self.upload_mesh(&triangle_mesh);
     self.upload_mesh(&monkey_mesh);
+    self.upload_mesh(&cube_diorama);
+    self.upload_mesh(&body);
     self.meshes.put("triangle", triangle_mesh) catch @panic("Out of memory");
     self.meshes.put("monkey", monkey_mesh) catch @panic("Out of memory");
+    self.meshes.put("diorama", cube_diorama) catch @panic("Out of memory");
+    self.meshes.put("body", body) catch @panic("Out of memory");
 }
 
-fn 
-upload_mesh(self: *Self, mesh: *Mesh) void {
+fn upload_mesh(self: *Self, mesh: *Mesh) void {
     const buffer_ci = std.mem.zeroInit(c.VkBufferCreateInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = mesh.vertices.len * @sizeOf(mesh_mod.Vertex),
@@ -1256,7 +1287,7 @@ pub fn run(self: *Self) void {
             }
         }
 
-        if (self.camera_input.square_norm() > (0.1 * 0.1)) {
+        if (self.camera_input.squared_norm() > (0.1 * 0.1)) {
             const camera_delta = self.camera_input.normalized().mul(delta * 5.0);
             self.camera_pos = Vec3.add(self.camera_pos, camera_delta);
         }

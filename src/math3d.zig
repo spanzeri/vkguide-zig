@@ -32,7 +32,7 @@ pub const Vec3 = struct {
         return vec4(self.x, self.y, self.z, w);
     }
 
-    pub fn square_norm(self: Self) callconv(.Inline) f32 {
+    pub fn squared_norm(self: Self) callconv(.Inline) f32 {
         return self.x * self.x + self.y * self.y + self.z * self.z;
     }
 
