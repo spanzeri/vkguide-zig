@@ -72,6 +72,14 @@ const GPUObjectData = struct {
     model_matrix: Mat4,
 };
 
+const UploadContext = struct {
+    upload_fence: c.VkFence = VK_NULL_HANDLE,
+    command_pool: c.VkCommandPool = VK_NULL_HANDLE,
+    command_buffer: c.VkCommandBuffer = VK_NULL_HANDLE,
+};
+
+const ImmediateSubmitFn = fn (self: Self, cmd: c.VkCommandBuffer) void;
+
 const FRAME_OVERLAP = 2;
 
 // Data
@@ -95,7 +103,6 @@ physical_device_properties: c.VkPhysicalDeviceProperties = undefined,
 device: c.VkDevice = VK_NULL_HANDLE,
 surface: c.VkSurfaceKHR = VK_NULL_HANDLE,
 
-
 swapchain: c.VkSwapchainKHR = VK_NULL_HANDLE,
 swapchain_format: c.VkFormat = undefined,
 swapchain_extent: c.VkExtent2D = undefined,
@@ -113,6 +120,8 @@ framebuffers: []c.VkFramebuffer = undefined,
 depth_image_view: c.VkImageView = VK_NULL_HANDLE,
 depth_image: AllocatedImage = undefined,
 depth_format: c.VkFormat = undefined,
+
+upload_context: UploadContext = .{},
 
 frames: [FRAME_OVERLAP]FrameData = .{ FrameData{} } ** FRAME_OVERLAP,
 
@@ -419,6 +428,30 @@ fn init_commands(self: *Self) void {
         log.info("Created command pool and command buffer", .{});
     }
 
+    // =================================
+    // Upload context
+    //
+
+    // For the time being this is submitting on the graphics queue
+    const upload_command_pool_ci = std.mem.zeroInit(c.VkCommandPoolCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
+        .flags = 0,
+        .queueFamilyIndex = self.graphics_queue_family,
+    });
+
+    check_vk(c.vkCreateCommandPool(self.device, &upload_command_pool_ci, vk_alloc_cbs, &self.upload_context.command_pool))
+        catch @panic("Failed to create upload command pool");
+    self.deletion_queue.append(VulkanDeleter.make(self.upload_context.command_pool, c.vkDestroyCommandPool)) catch @panic("Out of memory");
+
+    const upload_command_buffer_ai = std.mem.zeroInit(c.VkCommandBufferAllocateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = self.upload_context.command_pool,
+        .level = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    });
+
+    check_vk(c.vkAllocateCommandBuffers(self.device, &upload_command_buffer_ai, &self.upload_context.command_buffer))
+        catch @panic("Failed to allocate upload command buffer");
 }
 
 fn init_default_renderpass(self: *Self) void {
@@ -559,6 +592,16 @@ fn init_sync_structures(self: *Self) void {
             catch @panic("Failed to create render fence");
         self.deletion_queue.append(VulkanDeleter.make(frame.render_fence, c.vkDestroyFence)) catch @panic("Out of memory");
     }
+
+    // Upload context
+    const upload_fence_ci = std.mem.zeroInit(c.VkFenceCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+    });
+
+    check_vk(c.vkCreateFence(self.device, &upload_fence_ci, vk_alloc_cbs, &self.upload_context.upload_fence))
+        catch @panic("Failed to create upload fence");
+
+    self.deletion_queue.append(VulkanDeleter.make(self.upload_context.upload_fence, c.vkDestroyFence)) catch @panic("Out of memory");
 
     log.info("Created sync structures", .{});
 }
@@ -1189,35 +1232,81 @@ fn load_meshes(self: *Self) void {
 }
 
 fn upload_mesh(self: *Self, mesh: *Mesh) void {
-    const buffer_ci = std.mem.zeroInit(c.VkBufferCreateInfo, .{
+    // Create a cpu buffer for staging
+    const staging_buffer_ci = std.mem.zeroInit(c.VkBufferCreateInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = mesh.vertices.len * @sizeOf(mesh_mod.Vertex),
-        .usage = c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        .usage = c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
     });
 
-    const vma_alloc_info = std.mem.zeroInit(c.VmaAllocationCreateInfo, .{
-        .usage = c.VMA_MEMORY_USAGE_CPU_TO_GPU,
+    const staging_buffer_ai = std.mem.zeroInit(c.VmaAllocationCreateInfo, .{
+        .usage = c.VMA_MEMORY_USAGE_CPU_ONLY,
+    });
+
+    var staging_buffer: AllocatedBuffer = undefined;
+    check_vk(c.vmaCreateBuffer(
+        self.vma_allocator,
+        &staging_buffer_ci,
+        &staging_buffer_ai,
+        &staging_buffer.buffer,
+        &staging_buffer.allocation,
+        null)) catch @panic("Failed to create vertex buffer");
+
+    log.info("Created staging buffer {}", .{ @intFromPtr(mesh.vertex_buffer.buffer) });
+
+    var data: ?*align(@alignOf(mesh_mod.Vertex)) anyopaque = undefined;
+    check_vk(c.vmaMapMemory(self.vma_allocator, staging_buffer.allocation, &data))
+        catch @panic("Failed to map vertex buffer");
+    @memcpy(@as([*]mesh_mod.Vertex, @ptrCast(data)), mesh.vertices);
+    c.vmaUnmapMemory(self.vma_allocator, staging_buffer.allocation);
+
+    log.info("Copied mesh data into staging buffer", .{});
+
+    const gpu_buffer_ci = std.mem.zeroInit(c.VkBufferCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = mesh.vertices.len * @sizeOf(mesh_mod.Vertex),
+        .usage = c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | c.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+    });
+
+    const gpu_buffer_ai = std.mem.zeroInit(c.VmaAllocationCreateInfo, .{
+        .usage = c.VMA_MEMORY_USAGE_GPU_ONLY,
     });
 
     check_vk(c.vmaCreateBuffer(
         self.vma_allocator,
-        &buffer_ci,
-        &vma_alloc_info,
+        &gpu_buffer_ci,
+        &gpu_buffer_ai,
         &mesh.vertex_buffer.buffer,
         &mesh.vertex_buffer.allocation,
         null)) catch @panic("Failed to create vertex buffer");
 
-    log.info("Created buffer {}", .{ @intFromPtr(mesh.vertex_buffer.buffer) });
+    log.info("Created GPU buffer for mesh", .{});
 
     self.buffer_deletion_queue.append(
         VmaBufferDeleter{ .buffer = mesh.vertex_buffer }
     ) catch @panic("Out of memory");
 
-    var data: ?*align(@alignOf(mesh_mod.Vertex)) anyopaque = undefined;
-    check_vk(c.vmaMapMemory(self.vma_allocator, mesh.vertex_buffer.allocation, &data))
-        catch @panic("Failed to map vertex buffer");
-    @memcpy(@as([*]mesh_mod.Vertex, @ptrCast(data)), mesh.vertices);
-    c.vmaUnmapMemory(self.vma_allocator, mesh.vertex_buffer.allocation);
+    // Now we can copy immediate the content of the staging buffer to the gpu
+    // only memory.
+    self.immediate_submit(struct {
+        mesh_buffer: c.VkBuffer,
+        staging_buffer: c.VkBuffer,
+        size: usize,
+
+        fn submit(ctx: @This(), cmd: c.VkCommandBuffer) void {
+            const copy_region = std.mem.zeroInit(c.VkBufferCopy, .{
+                .size = ctx.size,
+            });
+            c.vkCmdCopyBuffer(cmd, ctx.staging_buffer, ctx.mesh_buffer, 1, &copy_region);
+        }
+    }{
+        .mesh_buffer = mesh.vertex_buffer.buffer,
+        .staging_buffer = staging_buffer.buffer,
+        .size = mesh.vertices.len * @sizeOf(mesh_mod.Vertex),
+    });
+
+    // We can free the staging buffer at this point.
+    c.vmaDestroyBuffer(self.vma_allocator, staging_buffer.buffer, staging_buffer.allocation); 
 }
 
 pub fn run(self: *Self) void {
@@ -1565,6 +1654,84 @@ fn pad_uniform_buffer_size(self: *Self, original_size: usize) usize {
     const min_ubo_alignment = @as(usize, @intCast(self.physical_device_properties.limits.minUniformBufferOffsetAlignment));
     const aligned_size = (original_size + min_ubo_alignment - 1) & ~(min_ubo_alignment - 1);
     return aligned_size;
+}
+
+fn immediate_submit(self: *Self, submit_ctx: anytype) void {
+    // Check the context is good
+    comptime {
+        var Context = @TypeOf(submit_ctx);
+        var is_ptr = false;
+        switch (@typeInfo(Context)) {
+            .Struct, .Union, .Enum => {},
+            .Pointer => |ptr| {
+                if (ptr.size != .One) {
+                    @compileError("Context must be a type with a submit function. " ++ @typeName(Context) ++ "is a multi element pointer");
+                }
+                Context = ptr.child;
+                is_ptr = true;
+                switch (Context) {
+                    .Struct, .Union, .Enum, .Opaque => {},
+                    else => @compileError(
+                        "Context must be a type with a submit function. "
+                        ++ @typeName(Context)
+                        ++ "is a pointer to a non struct/union/enum/opaque type"),
+                }
+            },
+            else => @compileError("Context must be a type with a submit method. Cannot use: " ++ @typeName(Context)),
+        }
+
+        if (!@hasDecl(Context, "submit")) {
+            @compileError("Context should have a submit method");
+        }
+
+        const submit_fn_info=  @typeInfo(@TypeOf(Context.submit));
+        if (submit_fn_info != .Fn) {
+            @compileError("Context submit method should be a function");
+        }
+
+        if (submit_fn_info.Fn.params.len != 2) {
+            @compileError("Context submit method should have two parameters");
+        }
+
+        if (submit_fn_info.Fn.params[0].type != Context) {
+            @compileError("Context submit method first parameter should be of type: " ++ @typeName(Context));
+        }
+
+        if (submit_fn_info.Fn.params[1].type != c.VkCommandBuffer) {
+            @compileError("Context submit method second parameter should be of type: " ++ @typeName(c.VkCommandBuffer));
+        }
+    }
+
+    const cmd = self.upload_context.command_buffer;
+
+    const commmand_begin_ci = std.mem.zeroInit(c.VkCommandBufferBeginInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    });
+    check_vk(c.vkBeginCommandBuffer(cmd, &commmand_begin_ci))
+        catch @panic("Failed to begin command buffer");
+
+    submit_ctx.submit(cmd);
+
+    check_vk(c.vkEndCommandBuffer(cmd))
+        catch @panic("Failed to end command buffer");
+
+    const submit_info = std.mem.zeroInit(c.VkSubmitInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &cmd,
+    });
+
+    check_vk(c.vkQueueSubmit(self.graphics_queue, 1, &submit_info, self.upload_context.upload_fence))
+        catch @panic("Failed to submit to graphics queue");
+
+    check_vk(c.vkWaitForFences(self.device, 1, &self.upload_context.upload_fence, c.VK_TRUE, 1_000_000_000))
+        catch @panic("Failed to wait for upload fence");
+    check_vk(c.vkResetFences(self.device, 1, &self.upload_context.upload_fence))
+        catch @panic("Failed to reset upload fence");
+
+    check_vk(c.vkResetCommandPool(self.device, self.upload_context.command_pool, 0))
+        catch @panic("Failed to reset command pool");
 }
 
 // Error checking for vulkan and SDL
