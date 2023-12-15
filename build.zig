@@ -24,6 +24,8 @@ pub fn build(b: *std.Build) void {
     }
     exe.addCSourceFile(.{ .file = .{ .path = "src/vk_mem_alloc.cpp" }, .flags = &.{ "" } });
     exe.addIncludePath(.{ .path = "thirdparty/vma/" });
+    exe.addCSourceFile(.{ .file = .{ .path = "src/stb_image.c" }, .flags = &.{ "" } });
+    exe.addIncludePath(.{ .path = "thirdparty/stb/" });
 
     exe.linkLibCpp();
 

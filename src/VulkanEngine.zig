@@ -11,6 +11,9 @@ const Mat4 = m3d.Mat4;
 const Vec3 = m3d.Vec3;
 const Vec4 = m3d.Vec4;
 
+const texs = @import("textures.zig");
+const Texture = texs.Texture;
+
 const log = std.log.scoped(.vulkan_engine);
 
 const Self = @This();
@@ -78,8 +81,6 @@ const UploadContext = struct {
     command_buffer: c.VkCommandBuffer = VK_NULL_HANDLE,
 };
 
-const ImmediateSubmitFn = fn (self: Self, cmd: c.VkCommandBuffer) void;
-
 const FRAME_OVERLAP = 2;
 
 // Data
@@ -137,6 +138,7 @@ vma_allocator: c.VmaAllocator = undefined,
 renderables: std.ArrayList(RenderObject),
 materials: std.StringHashMap(Material),
 meshes: std.StringHashMap(Mesh),
+textures: std.StringHashMap(Texture),
 
 camera_pos: Vec3 = m3d.vec3(0.0, -3.0, -10.0),
 camera_input: Vec3 = m3d.vec3(0.0, 0.0, 0.0),
@@ -145,12 +147,12 @@ deletion_queue: std.ArrayList(VulkanDeleter) = undefined,
 buffer_deletion_queue: std.ArrayList(VmaBufferDeleter) = undefined,
 image_deletion_queue: std.ArrayList(VmaImageDeleter) = undefined,
 
-const MeshPushConstants = struct {
+pub const MeshPushConstants = struct {
     data: Vec4,
     render_matrix: Mat4,
 };
 
-const VulkanDeleter = struct {
+pub const VulkanDeleter = struct {
     object: ?*anyopaque,
     delete_fn: *const fn(entry: *VulkanDeleter, self: *Self) void,
 
@@ -182,7 +184,7 @@ const VulkanDeleter = struct {
     }
 };
 
-const VmaBufferDeleter = struct {
+pub const VmaBufferDeleter = struct {
     buffer: AllocatedBuffer,
 
     fn delete(self: *VmaBufferDeleter, engine: *Self) void {
@@ -190,7 +192,7 @@ const VmaBufferDeleter = struct {
     }
 };
 
-const VmaImageDeleter = struct {
+pub const VmaImageDeleter = struct {
     image: AllocatedImage,
 
     fn delete(self: *VmaImageDeleter, engine: *Self) void {
@@ -219,6 +221,7 @@ pub fn init(a: std.mem.Allocator) Self {
         .renderables = std.ArrayList(RenderObject).init(a),
         .materials = std.StringHashMap(Material).init(a),
         .meshes = std.StringHashMap(Mesh).init(a),
+        .textures = std.StringHashMap(Texture).init(a),
     };
 
     engine.init_instance();
@@ -244,6 +247,7 @@ pub fn init(a: std.mem.Allocator) Self {
     engine.init_sync_structures();
     engine.init_descriptors();
     engine.init_pipelines();
+    engine.load_textures();
     engine.load_meshes();
     engine.init_scene();
 
@@ -1156,6 +1160,7 @@ pub fn cleanup(self: *Self) void {
         self.allocator.free(entry.value_ptr.vertices);
     }
 
+    self.textures.deinit();
     self.meshes.deinit();
     self.materials.deinit();
     self.renderables.deinit();
@@ -1192,6 +1197,41 @@ pub fn cleanup(self: *Self) void {
 
     c.vkDestroyInstance(self.instance, vk_alloc_cbs);
     c.SDL_DestroyWindow(self.window);
+}
+
+fn load_textures(self: *Self) void {
+    const lost_empire_image = texs.load_image_from_file(self, "assets/lost_empire-RGBA.png") catch @panic("Failed to load image");
+    self.image_deletion_queue.append(VmaImageDeleter{ .image = lost_empire_image }) catch @panic("Out of memory");
+    const image_view_ci = std.mem.zeroInit(c.VkImageViewCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .viewType = c.VK_IMAGE_VIEW_TYPE_2D,
+        .image = lost_empire_image.image,
+        .format = c.VK_FORMAT_R8G8B8A8_SRGB,
+        .components = .{
+            .r = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+            .g = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+            .b = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+            .a = c.VK_COMPONENT_SWIZZLE_IDENTITY,
+        },
+        .subresourceRange = .{
+            .aspectMask = c.VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+    });
+
+    var lost_empire = Texture{
+        .image = lost_empire_image,
+        .image_view = VK_NULL_HANDLE,
+    };
+
+    check_vk(c.vkCreateImageView(self.device, &image_view_ci, vk_alloc_cbs, &lost_empire.image_view))
+        catch @panic("Failed to create image view");
+    self.deletion_queue.append(VulkanDeleter.make(lost_empire.image_view, c.vkDestroyImageView)) catch @panic("Out of memory");
+
+    self.textures.put("empire_diffuse", lost_empire) catch @panic("Out of memory");
 }
 
 fn load_meshes(self: *Self) void {
@@ -1627,7 +1667,12 @@ fn get_mesh(self: *Self, name: []const u8) ?*Mesh {
     return self.meshes.getPtr(name);
 }
 
-fn create_buffer(self: *Self, alloc_size: usize, usage: c.VkBufferUsageFlags, memory_usage: c.VmaMemoryUsage) AllocatedBuffer {
+pub fn create_buffer(
+    self: *Self,
+    alloc_size: usize,
+    usage: c.VkBufferUsageFlags,
+    memory_usage: c.VmaMemoryUsage
+) AllocatedBuffer {
     const buffer_ci = std.mem.zeroInit(c.VkBufferCreateInfo, .{
         .sType = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = alloc_size,
@@ -1656,7 +1701,7 @@ fn pad_uniform_buffer_size(self: *Self, original_size: usize) usize {
     return aligned_size;
 }
 
-fn immediate_submit(self: *Self, submit_ctx: anytype) void {
+pub fn immediate_submit(self: *Self, submit_ctx: anytype) void {
     // Check the context is good
     comptime {
         var Context = @TypeOf(submit_ctx);
