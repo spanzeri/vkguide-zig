@@ -166,6 +166,14 @@ fn parse_content(ctx: *ParseContext, content: []const u8) !void {
             },
             'f' => try parse_face(ctx, line[1..]),
             'o' => try parse_object(ctx, line[1..]),
+            'g' => {
+                if (!std.mem.startsWith(u8, line, "g ")) {
+                    log_err(ctx, "Unknown token at beginning of line: {s}", .{ line });
+                    return ParseError.invalid_token;
+                } else {
+                    log_warn(ctx, "Groups are not supported. Group name: {s}", .{ line[2..] });
+                }
+            },
             'm' => {
                 if (std.mem.startsWith(u8, line, "mtllib")) {
                     try parse_material(ctx, line);

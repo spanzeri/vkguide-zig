@@ -9,3 +9,4 @@ assets/poly_test.mtl filter=lfs diff=lfs merge=lfs -text
 assets/poly_test.obj filter=lfs diff=lfs merge=lfs -text
 assets/suzanne_and_torus.mtl filter=lfs diff=lfs merge=lfs -text
 assets/lost_empire-RGBA.png filter=lfs diff=lfs merge=lfs -text
+assets/lost_empire.obj filter=lfs diff=lfs merge=lfs -text

@@ -11,6 +11,22 @@ pub fn abs(f: anytype) callconv(.Inline) @TypeOf(f) {
     return if (f < 0) -f else f;
 }
 
+pub const Vec2 = struct {
+    x: f32,
+    y: f32,
+
+    pub const ZERO = make(0.0, 0.0);
+
+    pub fn make(x: f32, y: f32) callconv(.Inline) Vec2 {
+        return .{ .x = x, .y = y };
+    }
+
+    pub fn to_vec3(self: Vec2, z: f32) callconv(.Inline) Vec3 {
+        return .{ .x = self.x, .y = self.y, .z = z };
+    }
+};
+
+
 pub const Vec3 = struct {
     x: f32,
     y: f32,

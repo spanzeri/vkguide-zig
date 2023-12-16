@@ -8,6 +8,7 @@ const Mesh = mesh_mod.Mesh;
 
 const m3d = @import("math3d.zig");
 const Mat4 = m3d.Mat4;
+const Vec2 = m3d.Vec2;
 const Vec3 = m3d.Vec3;
 const Vec4 = m3d.Vec4;
 
@@ -36,6 +37,7 @@ pub const AllocatedImage = struct {
 
 // Scene management
 const Material = struct {
+    texture_set: c.VkDescriptorSet = VK_NULL_HANDLE,
     pipeline: c.VkPipeline,
     pipeline_layout: c.VkPipelineLayout,
 };
@@ -131,6 +133,7 @@ camera_and_scene_buffer: AllocatedBuffer = undefined,
 
 global_set_layout: c.VkDescriptorSetLayout = VK_NULL_HANDLE,
 object_set_layout: c.VkDescriptorSetLayout = VK_NULL_HANDLE,
+single_texture_set_layout: c.VkDescriptorSetLayout = VK_NULL_HANDLE,
 descriptor_pool: c.VkDescriptorPool = VK_NULL_HANDLE,
 
 vma_allocator: c.VmaAllocator = undefined,
@@ -863,6 +866,34 @@ fn init_pipelines(self: *Self) void {
     }
 
     _ = self.create_material(mesh_pipeline, mesh_pipeline_layout, "default_mesh");
+
+    // Textured mesh shader
+    var textured_pipe_layout_ci = mesh_pipeline_layout_ci;
+    const textured_set_layoyts = [_]c.VkDescriptorSetLayout{
+        self.global_set_layout,
+        self.object_set_layout,
+        self.single_texture_set_layout,
+    };
+    textured_pipe_layout_ci.setLayoutCount = @as(u32, @intCast(textured_set_layoyts.len));
+    textured_pipe_layout_ci.pSetLayouts = &textured_set_layoyts[0];
+
+    var textured_pipe_layout: c.VkPipelineLayout = undefined;
+    check_vk(c.vkCreatePipelineLayout(self.device, &textured_pipe_layout_ci, vk_alloc_cbs, &textured_pipe_layout))
+        catch @panic("Failed to create textured mesh pipeline layout");
+    self.deletion_queue.append(VulkanDeleter.make(textured_pipe_layout, c.vkDestroyPipelineLayout))
+        catch @panic("Out of memory");
+
+    const textured_lit_frag_code align(4) = @embedFile("textured_lit.frag").*;
+    const textured_lit_frag = create_shader_module(self, &textured_lit_frag_code) orelse VK_NULL_HANDLE;
+    defer c.vkDestroyShaderModule(self.device, textured_lit_frag, vk_alloc_cbs);
+
+    pipeline_builder.shader_stages[1].module = textured_lit_frag;
+    pipeline_builder.pipeline_layout = textured_pipe_layout;
+    const textured_mesh_pipeline = pipeline_builder.build(self.device, self.render_pass);
+
+    _ = self.create_material(textured_mesh_pipeline, textured_pipe_layout, "textured_mesh");
+    self.deletion_queue.append(VulkanDeleter.make(textured_mesh_pipeline, c.vkDestroyPipeline))
+        catch @panic("Out of memory");
 }
 
 fn init_descriptors(self: *Self) void {
@@ -871,6 +902,7 @@ fn init_descriptors(self: *Self) void {
         .{ .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 10, },
         .{ .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, .descriptorCount = 10, },
         .{ .type = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 10, },
+        .{ .type = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 10, },
     };
 
     const pool_ci = std.mem.zeroInit(c.VkDescriptorPoolCreateInfo, .{
@@ -1015,6 +1047,28 @@ fn init_descriptors(self: *Self) void {
     c.vkUpdateDescriptorSets(
         self.device, @as(u32, @intCast(camera_and_scene_writes.len)), &camera_and_scene_writes[0], 0, null);
 
+    // =================================
+    // Texture set layout
+    //
+    const texture_bind = std.mem.zeroInit(c.VkDescriptorSetLayoutBinding, .{
+        .binding = 0,
+        .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1,
+        .stageFlags = c.VK_SHADER_STAGE_FRAGMENT_BIT,
+    });
+
+    const texture_set_ci = std.mem.zeroInit(c.VkDescriptorSetLayoutCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindings = &texture_bind,
+    });
+
+    check_vk(c.vkCreateDescriptorSetLayout(self.device, &texture_set_ci, vk_alloc_cbs, &self.single_texture_set_layout))
+        catch @panic("Failed to create texture descriptor set layout");
+
+    self.deletion_queue.append(VulkanDeleter.make(self.single_texture_set_layout, c.vkDestroyDescriptorSetLayout))
+        catch @panic("Out of memory");
+
     for (0..FRAME_OVERLAP) |i| {
         // ======================================================================
         // Allocate descriptor sets
@@ -1105,31 +1159,85 @@ fn init_scene(self: *Self) void {
     };
     self.renderables.append(monkey) catch @panic("Out of memory");
 
-    const diorama = RenderObject {
-        .mesh = self.meshes.getPtr("diorama") orelse @panic("Failed to get diorama mesh"),
-        .material = self.materials.getPtr("default_mesh") orelse @panic("Failed to get default mesh material"),
-        .transform = Mat4.mul(
-            Mat4.mul(
-                m3d.translation(m3d.vec3(3.0, 1, 0)),
-                m3d.rotation(m3d.vec3(0, 1, 0), std.math.degreesToRadians(f32, -60)),
-            ),
-            m3d.scale(m3d.vec3(2.0, 2.0, 2.0))
-        ),
-    };
-    self.renderables.append(diorama) catch @panic("Out of memory");
+    // const diorama = RenderObject {
+    //     .mesh = self.meshes.getPtr("diorama") orelse @panic("Failed to get diorama mesh"),
+    //     .material = self.materials.getPtr("default_mesh") orelse @panic("Failed to get default mesh material"),
+    //     .transform = Mat4.mul(
+    //         Mat4.mul(
+    //             m3d.translation(m3d.vec3(3.0, 1, 0)),
+    //             m3d.rotation(m3d.vec3(0, 1, 0), std.math.degreesToRadians(f32, -60)),
+    //         ),
+    //         m3d.scale(m3d.vec3(2.0, 2.0, 2.0))
+    //     ),
+    // };
+    // self.renderables.append(diorama) catch @panic("Out of memory");
+    //
+    // const body = RenderObject {
+    //     .mesh = self.meshes.getPtr("body") orelse @panic("Failed to get body mesh"),
+    //     .material = self.materials.getPtr("default_mesh") orelse @panic("Failed to get default mesh material"),
+    //     .transform = Mat4.mul(
+    //         Mat4.mul(
+    //             m3d.translation(m3d.vec3(-3.0, -0.5, 0)),
+    //             m3d.rotation(m3d.vec3(0, 1, 0), std.math.degreesToRadians(f32, 45)),
+    //         ),
+    //         m3d.scale(m3d.vec3(2.0, 2.0, 2.0))
+    //     ),
+    // };
+    // self.renderables.append(body) catch @panic("Out of memory");
 
-    const body = RenderObject {
-        .mesh = self.meshes.getPtr("body") orelse @panic("Failed to get body mesh"),
-        .material = self.materials.getPtr("default_mesh") orelse @panic("Failed to get default mesh material"),
-        .transform = Mat4.mul(
-            Mat4.mul(
-                m3d.translation(m3d.vec3(-3.0, -0.5, 0)),
-                m3d.rotation(m3d.vec3(0, 1, 0), std.math.degreesToRadians(f32, 45)),
-            ),
-            m3d.scale(m3d.vec3(2.0, 2.0, 2.0))
-        ),
+    var material = self.materials.getPtr("textured_mesh") orelse @panic("Failed to get default mesh material");
+
+    // Allocate descriptor set for signle-texture to use on the material
+    const descriptor_set_alloc_info = std.mem.zeroInit(c.VkDescriptorSetAllocateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = self.descriptor_pool,
+        .descriptorSetCount = 1,
+        .pSetLayouts = &self.single_texture_set_layout,
+    });
+
+    check_vk(c.vkAllocateDescriptorSets(self.device, &descriptor_set_alloc_info, &material.texture_set))
+        catch @panic("Failed to allocate descriptor set");
+
+    // Sampler
+    const sampler_ci = std.mem.zeroInit(c.VkSamplerCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = c.VK_FILTER_NEAREST,
+        .minFilter = c.VK_FILTER_NEAREST,
+        .addressModeU = c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeV = c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeW = c.VK_SAMPLER_ADDRESS_MODE_REPEAT,
+    });
+
+    var sampler: c.VkSampler = undefined;
+    check_vk(c.vkCreateSampler(self.device, &sampler_ci, vk_alloc_cbs, &sampler))
+        catch @panic("Failed to create sampler");
+    self.deletion_queue.append(VulkanDeleter.make(sampler, c.vkDestroySampler)) catch @panic("Out of memory");
+
+    const lost_empire_tex = (self.textures.get("empire_diffuse") orelse @panic("Failed to get empire texture"));
+
+    const descriptor_image_info = std.mem.zeroInit(c.VkDescriptorImageInfo, .{
+        .sampler = sampler,
+        .imageView = lost_empire_tex.image_view,
+        .imageLayout = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    });
+
+    const write_descriptor_set = std.mem.zeroInit(c.VkWriteDescriptorSet, .{
+        .sType = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = material.texture_set,
+        .dstBinding = 0,
+        .descriptorCount = 1,
+        .descriptorType = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .pImageInfo = &descriptor_image_info,
+    });
+
+    c.vkUpdateDescriptorSets(self.device, 1, &write_descriptor_set, 0, null);
+
+    const lost_empire = RenderObject {
+        .mesh = self.meshes.getPtr("lost_empire") orelse @panic("Failed to get triangle mesh"),
+        .transform = m3d.translation(m3d.vec3(5.0, -10.0, 0.0)),
+        .material = material,
     };
-    self.renderables.append(body) catch @panic("Out of memory");
+    self.renderables.append(lost_empire) catch @panic("Out of memory");
 
     var x: i32 = -20;
     while (x <= 20) : (x += 1) {
@@ -1240,35 +1348,43 @@ fn load_meshes(self: *Self) void {
             .position = m3d.vec3(1.0, 1.0, 0.0),
             .normal = undefined,
             .color = m3d.vec3(0.0, 1.0, 0.0),
+            .uv = Vec2.make(1.0, 1.0),
         },
         .{
             .position = m3d.vec3(-1.0, 1.0, 0.0),
             .normal = undefined,
             .color = m3d.vec3(0.0, 1.0, 0.0),
+            .uv = Vec2.make(0.0, 1.0),
         },
         .{
             .position = m3d.vec3(0.0, -1.0, 0.0),
             .normal = undefined,
             .color = m3d.vec3(0.0, 1.0, 0.0),
+            .uv = Vec2.make(0.5, 0.0),
         }
     };
 
     var triangle_mesh = Mesh{
         .vertices = self.allocator.dupe(mesh_mod.Vertex, vertices[0..]) catch @panic("Out of memory"),
     };
+    self.upload_mesh(&triangle_mesh);
+    self.meshes.put("triangle", triangle_mesh) catch @panic("Out of memory");
 
     var monkey_mesh = mesh_mod.load_from_obj(self.allocator, "assets/suzanne.obj");
-    var cube_diorama = mesh_mod.load_from_obj(self.allocator, "assets/cube_diorama.obj");
-    var body = mesh_mod.load_from_obj(self.allocator, "assets/body_male_realistic.obj");
-
-    self.upload_mesh(&triangle_mesh);
     self.upload_mesh(&monkey_mesh);
-    self.upload_mesh(&cube_diorama);
-    self.upload_mesh(&body);
-    self.meshes.put("triangle", triangle_mesh) catch @panic("Out of memory");
     self.meshes.put("monkey", monkey_mesh) catch @panic("Out of memory");
-    self.meshes.put("diorama", cube_diorama) catch @panic("Out of memory");
-    self.meshes.put("body", body) catch @panic("Out of memory");
+
+    //var cube_diorama = mesh_mod.load_from_obj(self.allocator, "assets/cube_diorama.obj");
+    //self.upload_mesh(&cube_diorama);
+    //self.meshes.put("diorama", cube_diorama) catch @panic("Out of memory");
+
+    //var body = mesh_mod.load_from_obj(self.allocator, "assets/body_male_realistic.obj");
+    //self.upload_mesh(&body);
+    //self.meshes.put("body", body) catch @panic("Out of memory");
+
+    var lost_empire = mesh_mod.load_from_obj(self.allocator, "assets/lost_empire.obj");
+    self.upload_mesh(&lost_empire);
+    self.meshes.put("lost_empire", lost_empire) catch @panic("Out of memory");
 }
 
 fn upload_mesh(self: *Self, mesh: *Mesh) void {
@@ -1624,6 +1740,18 @@ fn draw_objects(self: *Self, cmd: c.VkCommandBuffer, objects: []RenderObject) vo
                 1,
                 1,
                 &self.get_current_frame().object_descriptor_set,
+                0,
+                null);
+        }
+
+        if (object.material.texture_set != VK_NULL_HANDLE) {
+            c.vkCmdBindDescriptorSets(
+                cmd,
+                c.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                object.material.pipeline_layout,
+                2,
+                1,
+                &object.material.texture_set,
                 0,
                 null);
         }

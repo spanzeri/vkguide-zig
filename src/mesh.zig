@@ -3,6 +3,7 @@ const AllocatedBuffer = @import("VulkanEngine.zig").AllocatedBuffer;
 const m3d = @import("math3d.zig");
 const c = @import("clibs.zig");
 
+const Vec2 = m3d.Vec2;
 const Vec3 = m3d.Vec3;
 
 pub const VertexInputDescription = struct {
@@ -16,6 +17,7 @@ pub const Vertex = struct {
     position: Vec3,
     normal: Vec3,
     color: Vec3,
+    uv: Vec2,
 
     pub const vertex_input_description = VertexInputDescription{
         .bindings = &.{
@@ -43,6 +45,12 @@ pub const Vertex = struct {
                 .binding = 0,
                 .format = c.VK_FORMAT_R32G32B32_SFLOAT,
                 .offset = @offsetOf(Vertex, "color"),
+            }),
+            std.mem.zeroInit(c.VkVertexInputAttributeDescription, .{
+                .location = 3,
+                .binding = 0,
+                .format = c.VK_FORMAT_R32G32_SFLOAT,
+                .offset = @offsetOf(Vertex, "uv"),
             }),
         },
     };
@@ -75,11 +83,13 @@ pub fn load_from_obj(a: std.mem.Allocator, filepath: []const u8) Mesh {
                 const obj_index = object.indices[index_count];
                 const pos = obj_mesh.vertices[obj_index.vertex];
                 const nml = obj_mesh.normals[obj_index.normal];
+                const uvs = obj_mesh.uvs[obj_index.uv];
 
                 const vx = Vertex{
                     .position = m3d.vec3(pos[0], pos[1], pos[2]),
                     .normal = m3d.vec3(nml[0], nml[1], nml[2]),
                     .color = m3d.vec3(nml[0], nml[1], nml[2]),
+                    .uv = Vec2.make(uvs[0], 1.0 - uvs[1]),
                 };
 
                 // Triangulate the polygon
