@@ -26,6 +26,7 @@ pub fn build(b: *std.Build) void {
     exe.addIncludePath(.{ .path = "thirdparty/vma/" });
     exe.addCSourceFile(.{ .file = .{ .path = "src/stb_image.c" }, .flags = &.{ "" } });
     exe.addIncludePath(.{ .path = "thirdparty/stb/" });
+    exe.addIncludePath(.{ .path = "thirdparty/imgui/" });
 
     exe.linkLibCpp();
 
@@ -33,6 +34,31 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
     b.installBinFile("thirdparty/sdl3/lib/SDL3.dll", "SDL3.dll");
+
+    // Imgui (with cimgui and vulkan + sdl3 backends)
+    const imgui_lib = b.addStaticLibrary(.{
+        .name = "cimgui",
+        .target = target,
+        .optimize = optimize,
+    });
+    imgui_lib.addIncludePath(.{ .path = "thirdparty/imgui/" });
+    imgui_lib.addIncludePath(.{ .path = "thirdparty/sdl3/include/" });
+    imgui_lib.linkLibCpp();
+    imgui_lib.addCSourceFiles(.{
+        .files = &.{
+            "thirdparty/imgui/imgui.cpp",
+            "thirdparty/imgui/imgui_demo.cpp",
+            "thirdparty/imgui/imgui_draw.cpp",
+            "thirdparty/imgui/imgui_tables.cpp",
+            "thirdparty/imgui/imgui_widgets.cpp",
+            "thirdparty/imgui/imgui_impl_sdl3.cpp",
+            "thirdparty/imgui/imgui_impl_vulkan.cpp",
+            "thirdparty/imgui/cimgui.cpp",
+            "thirdparty/imgui/cimgui_impl_sdl3.cpp",
+            "thirdparty/imgui/cimgui_impl_vulkan.cpp",
+        },
+    });
+    exe.linkLibrary(imgui_lib);
 
     const run_cmd = b.addRunArtifact(exe);
 
@@ -73,7 +99,7 @@ fn compile_all_shaders(b: *std.Build, exe: *std.Build.CompileStep) void {
                 const basename = std.fs.path.basename(entry.name);
                 const name = basename[0..basename.len - ext.len];
 
-                std.log.info("Found shader file to compile: {s}. Compiling with name: {s}", .{ entry.name, name });
+                std.debug.print("Found shader file to compile: {s}. Compiling with name: {s}\n", .{ entry.name, name });
                 add_shader(b, exe, name);
             }
         }

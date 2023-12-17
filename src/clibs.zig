@@ -16,5 +16,8 @@ pub usingnamespace @cImport({
     @cInclude("vulkan/vulkan.h");
     @cInclude("vk_mem_alloc.h");
     @cInclude("stb_image.h");
+    @cInclude("cimgui.h");
+    @cInclude("cimgui_impl_vulkan.h");
+    @cInclude("cimgui_impl_sdl3.h");
 });
 

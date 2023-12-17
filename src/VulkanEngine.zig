@@ -253,6 +253,7 @@ pub fn init(a: std.mem.Allocator) Self {
     engine.load_textures();
     engine.load_meshes();
     engine.init_scene();
+    engine.init_imgui();
 
     return engine;
 }
@@ -1258,6 +1259,54 @@ fn init_scene(self: *Self) void {
     }
 }
 
+fn init_imgui(self: *Self) void {
+    const pool_sizes = [_]c.VkDescriptorPoolSize{
+        .{ .type = c.VK_DESCRIPTOR_TYPE_SAMPLER, .descriptorCount = 1000, },
+        .{ .type = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .descriptorCount = 1000, },
+        .{ .type = c.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, .descriptorCount = 1000, },
+        .{ .type = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .descriptorCount = 1000, },
+        .{ .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, .descriptorCount = 1000, },
+        .{ .type = c.VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, .descriptorCount = 1000, },
+        .{ .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = 1000, },
+        .{ .type = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .descriptorCount = 1000, },
+        .{ .type = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, .descriptorCount = 1000, },
+        .{ .type = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, .descriptorCount = 1000, },
+        .{ .type = c.VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, .descriptorCount = 1000, },
+    };
+
+    const pool_ci = std.mem.zeroInit(c.VkDescriptorPoolCreateInfo, .{
+        .sType = c.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .flags = c.VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
+        .maxSets = 1000,
+        .poolSizeCount = @as(u32, @intCast(pool_sizes.len)),
+        .pPoolSizes = &pool_sizes[0],
+    });
+
+    var imgui_pool: c.VkDescriptorPool = undefined;
+    check_vk(c.vkCreateDescriptorPool(self.device, &pool_ci, vk_alloc_cbs, &imgui_pool))
+        catch @panic("Failed to create imgui descriptor pool");
+
+    _ = c.ImGui_CreateContext(null);
+    _ = c.cImGui_ImplSDL3_InitForVulkan(self.window);
+
+    var init_info = std.mem.zeroInit(c.ImGui_ImplVulkan_InitInfo, .{
+        .Instance = self.instance,
+        .PhysicalDevice = self.physical_device,
+        .Device = self.device,
+        .QueueFamily = self.graphics_queue_family,
+        .Queue = self.graphics_queue,
+        .DescriptorPool = imgui_pool,
+        .MinImageCount = FRAME_OVERLAP,
+        .ImageCount = FRAME_OVERLAP,
+        .MSAASamples = c.VK_SAMPLE_COUNT_1_BIT,
+    });
+
+    _ = c.cImGui_ImplVulkan_Init(&init_info, self.render_pass);
+    _ = c.cImGui_ImplVulkan_CreateFontsTexture();
+
+    self.deletion_queue.append(VulkanDeleter.make(imgui_pool, c.vkDestroyDescriptorPool)) catch @panic("Out of memory");
+}
+
 pub fn cleanup(self: *Self) void {
     check_vk(c.vkDeviceWaitIdle(self.device))
         catch @panic("Failed to wait for device idle");
@@ -1272,6 +1321,8 @@ pub fn cleanup(self: *Self) void {
     self.meshes.deinit();
     self.materials.deinit();
     self.renderables.deinit();
+
+    c.cImGui_ImplVulkan_Shutdown();
 
     for (self.buffer_deletion_queue.items) |*entry| {
         entry.delete(self);
@@ -1475,6 +1526,8 @@ pub fn run(self: *Self) void {
         while (c.SDL_PollEvent(&event) != 0) {
             if (event.type == c.SDL_EVENT_QUIT) {
                 quit = true;
+            } else if (c.cImGui_ImplSDL3_ProcessEvent(&event)) {
+                // Nothing to do here
             } else if (event.type == c.SDL_EVENT_KEY_DOWN) {
                 switch (event.key.keysym.scancode) {
                     c.SDL_SCANCODE_SPACE => {
@@ -1530,6 +1583,7 @@ pub fn run(self: *Self) void {
                     else => {},
                 }
             }
+
         }
 
         if (self.camera_input.squared_norm() > (0.1 * 0.1)) {
@@ -1537,7 +1591,19 @@ pub fn run(self: *Self) void {
             self.camera_pos = Vec3.add(self.camera_pos, camera_delta);
         }
 
+        {
+            var open = true;
+            // Imgui frame
+            c.cImGui_ImplVulkan_NewFrame();
+            c.cImGui_ImplSDL3_NewFrame();
+            c.ImGui_NewFrame();
+            c.ImGui_ShowDemoWindow(&open);
+
+            c.ImGui_Render();
+        }
+
         self.draw();
+
         delta = @floatCast(@as(f64, @floatFromInt(timer.lap())) / 1_000_000_000.0);
 
         const TitleDelay = struct {
@@ -1570,7 +1636,6 @@ fn draw(self: *Self) void {
         catch @panic("Failed to wait for render fence");
     check_vk(c.vkResetFences(self.device, 1, &frame.render_fence))
         catch @panic("Failed to reset render fence");
-
 
     var swapchain_image_index: u32 = undefined;
     check_vk(c.vkAcquireNextImageKHR(self.device, self.swapchain, timeout, frame.present_semaphore, VK_NULL_HANDLE, &swapchain_image_index))
@@ -1622,7 +1687,12 @@ fn draw(self: *Self) void {
     });
     c.vkCmdBeginRenderPass(cmd, &render_pass_begin_info, c.VK_SUBPASS_CONTENTS_INLINE);
 
+    // Objects
     self.draw_objects(cmd, self.renderables.items);
+
+    // UI
+    c.cImGui_ImplVulkan_RenderDrawData(c.ImGui_GetDrawData(), cmd);
+
 
     c.vkCmdEndRenderPass(cmd);
     check_vk(c.vkEndCommandBuffer(cmd))
