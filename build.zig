@@ -114,7 +114,7 @@ fn add_shader(b: *std.Build, exe: *std.Build.CompileStep, name: []const u8) void
     shader_compilation.addArg("-V");
     shader_compilation.addArg("-o");
     const output = shader_compilation.addOutputFileArg(outpath);
-    shader_compilation.addArg(source);
+    shader_compilation.addFileArg(.{ .path = source });
 
     exe.addAnonymousModule(name, .{ .source_file = output });
 }
