@@ -6,11 +6,11 @@ const check_vk = vki.check_vk;
 const mesh_mod = @import("mesh.zig");
 const Mesh = mesh_mod.Mesh;
 
-const m3d = @import("math3d.zig");
-const Mat4 = m3d.Mat4;
-const Vec2 = m3d.Vec2;
-const Vec3 = m3d.Vec3;
-const Vec4 = m3d.Vec4;
+const math3d = @import("math3d.zig");
+const Vec2 = math3d.Vec2;
+const Vec3 = math3d.Vec3;
+const Vec4 = math3d.Vec4;
+const Mat4 = math3d.Mat4;
 
 const texs = @import("textures.zig");
 const Texture = texs.Texture;
@@ -143,8 +143,8 @@ materials: std.StringHashMap(Material),
 meshes: std.StringHashMap(Mesh),
 textures: std.StringHashMap(Texture),
 
-camera_pos: Vec3 = m3d.vec3(0.0, -3.0, -10.0),
-camera_input: Vec3 = m3d.vec3(0.0, 0.0, 0.0),
+camera_pos: Vec3 = Vec3.make(0.0, -3.0, -10.0),
+camera_input: Vec3 = Vec3.make(0.0, 0.0, 0.0),
 
 deletion_queue: std.ArrayList(VulkanDeleter) = undefined,
 buffer_deletion_queue: std.ArrayList(VmaBufferDeleter) = undefined,
@@ -1235,7 +1235,7 @@ fn init_scene(self: *Self) void {
 
     const lost_empire = RenderObject {
         .mesh = self.meshes.getPtr("lost_empire") orelse @panic("Failed to get triangle mesh"),
-        .transform = m3d.translation(m3d.vec3(5.0, -10.0, 0.0)),
+        .transform = Mat4.translation(Vec3.make(5.0, -10.0, 0.0)),
         .material = material,
     };
     self.renderables.append(lost_empire) catch @panic("Out of memory");
@@ -1244,8 +1244,8 @@ fn init_scene(self: *Self) void {
     while (x <= 20) : (x += 1) {
         var y: i32 = -20;
         while (y <= 20) : (y += 1) {
-            const translation = m3d.translation(m3d.vec3(@floatFromInt(x), 0.0, @floatFromInt(y)));
-            const scale = m3d.scale(m3d.vec3(0.2, 0.2, 0.2));
+            const translation = Mat4.translation(Vec3.make(@floatFromInt(x), 0.0, @floatFromInt(y)));
+            const scale = Mat4.scale(Vec3.make(0.2, 0.2, 0.2));
             const transform = Mat4.mul(translation, scale);
 
             const tri = RenderObject {
@@ -1396,21 +1396,21 @@ fn load_textures(self: *Self) void {
 fn load_meshes(self: *Self) void {
     const vertices = [_]mesh_mod.Vertex{
         .{
-            .position = m3d.vec3(1.0, 1.0, 0.0),
+            .position = Vec3.make(1.0, 1.0, 0.0),
             .normal = undefined,
-            .color = m3d.vec3(0.0, 1.0, 0.0),
+            .color = Vec3.make(0.0, 1.0, 0.0),
             .uv = Vec2.make(1.0, 1.0),
         },
         .{
-            .position = m3d.vec3(-1.0, 1.0, 0.0),
+            .position = Vec3.make(-1.0, 1.0, 0.0),
             .normal = undefined,
-            .color = m3d.vec3(0.0, 1.0, 0.0),
+            .color = Vec3.make(0.0, 1.0, 0.0),
             .uv = Vec2.make(0.0, 1.0),
         },
         .{
-            .position = m3d.vec3(0.0, -1.0, 0.0),
+            .position = Vec3.make(0.0, -1.0, 0.0),
             .normal = undefined,
-            .color = m3d.vec3(0.0, 1.0, 0.0),
+            .color = Vec3.make(0.0, 1.0, 0.0),
             .uv = Vec2.make(0.5, 0.0),
         }
     };
@@ -1656,7 +1656,7 @@ fn draw(self: *Self) void {
 
     // Make a claer color that changes with each frame (120*pi frame period)
     // 0.11 and 0.12 fix for change in fabs
-    const color = m3d.abs(std.math.sin(@as(f32, @floatFromInt(self.frame_number)) / 120.0));
+    const color = math3d.abs(std.math.sin(@as(f32, @floatFromInt(self.frame_number)) / 120.0));
 
     const color_clear: c.VkClearValue = .{
         .color = .{ .float32 = [_]f32{ 0.0, 0.0, color, 1.0 } },
@@ -1727,9 +1727,9 @@ fn draw(self: *Self) void {
 }
 
 fn draw_objects(self: *Self, cmd: c.VkCommandBuffer, objects: []RenderObject) void {
-    const view = m3d.translation(self.camera_pos);
+    const view = Mat4.translation(self.camera_pos);
     const aspect = @as(f32, @floatFromInt(self.swapchain_extent.width)) / @as(f32, @floatFromInt(self.swapchain_extent.height));
-    var proj = m3d.perspective(std.math.degreesToRadians(f32, 70.0), aspect, 0.1, 200.0);
+    var proj = Mat4.perspective(std.math.degreesToRadians(f32, 70.0), aspect, 0.1, 200.0);
 
     proj.j.y *= -1.0;
 
@@ -1760,7 +1760,7 @@ fn draw_objects(self: *Self, cmd: c.VkCommandBuffer, objects: []RenderObject) vo
     const scene_data: *GPUSceneData = @ptrFromInt(@intFromPtr(data) + scene_data_offset);
     camera_data.* = curr_camera_data;
     const framed = @as(f32, @floatFromInt(self.frame_number)) / 120.0;
-    scene_data.ambient_color = m3d.vec3(@sin(framed), 0.0, @cos(framed)).to_point4();
+    scene_data.ambient_color = Vec3.make(@sin(framed), 0.0, @cos(framed)).to_point4();
 
     c.vmaUnmapMemory(self.vma_allocator, self.camera_and_scene_buffer.allocation);
 

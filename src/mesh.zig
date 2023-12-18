@@ -86,9 +86,9 @@ pub fn load_from_obj(a: std.mem.Allocator, filepath: []const u8) Mesh {
                 const uvs = obj_mesh.uvs[obj_index.uv];
 
                 const vx = Vertex{
-                    .position = m3d.vec3(pos[0], pos[1], pos[2]),
-                    .normal = m3d.vec3(nml[0], nml[1], nml[2]),
-                    .color = m3d.vec3(nml[0], nml[1], nml[2]),
+                    .position = Vec3.make(pos[0], pos[1], pos[2]),
+                    .normal = Vec3.make(nml[0], nml[1], nml[2]),
+                    .color = Vec3.make(nml[0], nml[1], nml[2]),
                     .uv = Vec2.make(uvs[0], 1.0 - uvs[1]),
                 };
 
