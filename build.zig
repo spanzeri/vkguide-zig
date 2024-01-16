@@ -12,7 +12,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const vk_lib_name = if (target.getOsTag() == .windows) "vulkan-1" else "vulkan";
+    const vk_lib_name = if (target.result.os.tag == .windows) "vulkan-1" else "vulkan";
 
     exe.linkSystemLibrary("SDL3");
     exe.linkSystemLibrary(vk_lib_name);
@@ -33,7 +33,12 @@ pub fn build(b: *std.Build) void {
     compile_all_shaders(b, exe);
 
     b.installArtifact(exe);
-    b.installBinFile("thirdparty/sdl3/lib/SDL3.dll", "SDL3.dll");
+    if (target.result.os.tag == .windows) {
+        b.installBinFile("thirdparty/sdl3/lib/SDL3.dll", "SDL3.dll");
+    } else {
+        b.installBinFile("thirdparty/sdl3/lib/libSDL3.so", "libSDL3.so.0");
+        exe.root_module.addRPathSpecial("$ORIGIN");
+    }
 
     // Imgui (with cimgui and vulkan + sdl3 backends)
     const imgui_lib = b.addStaticLibrary(.{
@@ -83,7 +88,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_unit_tests.step);
 }
 
-fn compile_all_shaders(b: *std.Build, exe: *std.Build.CompileStep) void {
+fn compile_all_shaders(b: *std.Build, exe: *std.Build.Step.Compile) void {
     // This is a fix for a change between zig 0.11 and 0.12
 
     const shaders_dir = if (@hasDecl(@TypeOf(b.build_root.handle), "openIterableDir"))
@@ -106,7 +111,7 @@ fn compile_all_shaders(b: *std.Build, exe: *std.Build.CompileStep) void {
     }
 }
 
-fn add_shader(b: *std.Build, exe: *std.Build.CompileStep, name: []const u8) void {
+fn add_shader(b: *std.Build, exe: *std.Build.Step.Compile, name: []const u8) void {
     const source = std.fmt.allocPrint(b.allocator, "shaders/{s}.glsl", .{name}) catch @panic("OOM");
     const outpath = std.fmt.allocPrint(b.allocator, "shaders/{s}.spv", .{name}) catch @panic("OOM");
 
@@ -116,5 +121,5 @@ fn add_shader(b: *std.Build, exe: *std.Build.CompileStep, name: []const u8) void
     const output = shader_compilation.addOutputFileArg(outpath);
     shader_compilation.addFileArg(.{ .path = source });
 
-    exe.addAnonymousModule(name, .{ .source_file = output });
+    exe.root_module.addAnonymousImport(name, .{ .root_source_file = output });
 }
