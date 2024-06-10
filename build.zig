@@ -1,13 +1,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-pub fn build(b: *std.Build) void {
+pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     const exe = b.addExecutable(.{
         .name = "vkguide-zig",
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -18,15 +18,16 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary(vk_lib_name);
     exe.addLibraryPath(.{ .cwd_relative = "thirdparty/sdl3/lib" });
     exe.addIncludePath(.{ .cwd_relative = "thirdparty/sdl3/include" });
-    if (b.env_map.get("VK_SDK_PATH")) |path| {
+    const env_map = try std.process.getEnvMap(b.allocator);
+    if (env_map.get("VK_SDK_PATH")) |path| {
         exe.addLibraryPath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/lib", .{ path }) catch @panic("OOM") });
         exe.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include", .{ path }) catch @panic("OOM") });
     }
-    exe.addCSourceFile(.{ .file = .{ .path = "src/vk_mem_alloc.cpp" }, .flags = &.{ "" } });
-    exe.addIncludePath(.{ .path = "thirdparty/vma/" });
-    exe.addCSourceFile(.{ .file = .{ .path = "src/stb_image.c" }, .flags = &.{ "" } });
-    exe.addIncludePath(.{ .path = "thirdparty/stb/" });
-    exe.addIncludePath(.{ .path = "thirdparty/imgui/" });
+    exe.addCSourceFile(.{ .file = b.path("src/vk_mem_alloc.cpp"), .flags = &.{ "" } });
+    exe.addIncludePath(b.path("thirdparty/vma/"));
+    exe.addIncludePath(b.path("thirdparty/stb/"));
+    exe.addIncludePath(b.path("thirdparty/imgui/"));
+    exe.addCSourceFile(.{ .file = b.path("src/stb_image.c"), .flags = &.{ "" } });
 
     exe.linkLibCpp();
 
@@ -46,8 +47,8 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    imgui_lib.addIncludePath(.{ .path = "thirdparty/imgui/" });
-    imgui_lib.addIncludePath(.{ .path = "thirdparty/sdl3/include/" });
+    imgui_lib.addIncludePath(b.path("thirdparty/imgui/"));
+    imgui_lib.addIncludePath(b.path("thirdparty/sdl3/include/"));
     imgui_lib.linkLibCpp();
     imgui_lib.addCSourceFiles(.{
         .files = &.{
@@ -77,7 +78,7 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     const unit_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -119,7 +120,7 @@ fn add_shader(b: *std.Build, exe: *std.Build.Step.Compile, name: []const u8) voi
     shader_compilation.addArg("-V");
     shader_compilation.addArg("-o");
     const output = shader_compilation.addOutputFileArg(outpath);
-    shader_compilation.addFileArg(.{ .path = source });
+    shader_compilation.addFileArg(b.path(source));
 
     exe.root_module.addAnonymousImport(name, .{ .root_source_file = output });
 }

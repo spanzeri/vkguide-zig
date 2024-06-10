@@ -1729,7 +1729,7 @@ fn draw(self: *Self) void {
 fn draw_objects(self: *Self, cmd: c.VkCommandBuffer, objects: []RenderObject) void {
     const view = Mat4.translation(self.camera_pos);
     const aspect = @as(f32, @floatFromInt(self.swapchain_extent.width)) / @as(f32, @floatFromInt(self.swapchain_extent.height));
-    var proj = Mat4.perspective(std.math.degreesToRadians(f32, 70.0), aspect, 0.1, 200.0);
+    var proj = Mat4.perspective(std.math.degreesToRadians(70.0), aspect, 0.1, 200.0);
 
     proj.j.y *= -1.0;
 
