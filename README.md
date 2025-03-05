@@ -12,9 +12,7 @@ C/C++ dependencies:
  - Media layer: [SDL3](https://www.libsdl.org/)
  - Image loading: [stb_image.h](https://github.com/nothings/stb)
  - Vulkan Memory Allocator: [AMD VMA](https://gpuopen.com/vulkan-memory-allocator/)
-
-In the future I might add [Dear ImGui](https://github.com/ocornut/imgui) if I decide
-to continue with the extra chapters.
+ - DearIMGUI: [Dear ImGui](https://github.com/ocornut/imgui)
 
 ### Note:
 I am not an experienced Zig programmer, and this code is not intended to be optimal or *idiomatic*.
