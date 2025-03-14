@@ -64,6 +64,12 @@ pub fn build(b: *std.Build) !void {
             "thirdparty/imgui/cimgui_impl_vulkan.cpp",
         },
     });
+    if (target.result.os.tag == .windows) {
+        if (env_map.get("VK_SDK_PATH")) |path| {
+            imgui_lib.addLibraryPath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/lib", .{ path }) catch @panic("OOM") });
+            imgui_lib.addIncludePath(.{ .cwd_relative = std.fmt.allocPrint(b.allocator, "{s}/include", .{ path }) catch @panic("OOM") });
+        }
+    }
     exe.linkLibrary(imgui_lib);
 
     const run_cmd = b.addRunArtifact(exe);

@@ -4,7 +4,7 @@ const std = @import("std");
 // Once 0.12 is officially released, we need to remove this
 pub fn abs(f: anytype) callconv(.Inline) @TypeOf(f) {
     const type_info = @typeInfo(@TypeOf(f));
-    if (type_info != .Float and type_info != .Int) {
+    if (type_info != .float and type_info != .int) {
         @compileError("Expected integer or floating point type");
     }
 
