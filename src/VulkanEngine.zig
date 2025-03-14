@@ -1771,11 +1771,9 @@ fn draw_objects(self: *Self, cmd: c.VkCommandBuffer, objects: []RenderObject) vo
     // TODO: In the future we should mark all the math structure as extern, so
     // we can more easily pass them back and forth from C and do those kind of
     // conversions.
-    // var object_data: ?*align(@alignOf(GPUObjectData)) anyopaque = undefined;
     var object_data: ?*anyopaque = undefined;
     check_vk(c.vmaMapMemory(self.vma_allocator, self.get_current_frame().object_buffer.allocation, &object_data))
         catch @panic("Failed to map object buffer");
-    // var object_data_arr: [*]GPUObjectData = @ptrCast(object_data orelse unreachable);
     var object_data_arr: [*]GPUObjectData = @ptrCast(@alignCast(object_data orelse unreachable));
     for (objects, 0..) |object, index| {
         object_data_arr[index] = GPUObjectData{
