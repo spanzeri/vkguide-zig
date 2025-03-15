@@ -33,7 +33,7 @@ To run on MacOS it would need:
 As I don't currently own a apple machine, I can't test it myself.
 
 The sole system dependency is the Vulkan headers:
-- This code has been compiled and executed using Zig versions 0.11.0 and 0.12.0 (master branch at the time of writing).
+- This code has been compiled and executed using Zig ~~versions 0.11.0 and 0.12.0 (master branch at the time of writing)~~ 0.14.0.
 
 The code has undergone testing on both Windows and Linux. Unfortunately, I lack a MacOS system for testing, so some adjustments in the `build.zig` script might be necessary for it to run on MacOS.
 
