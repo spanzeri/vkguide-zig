@@ -166,13 +166,13 @@ pub const VulkanDeleter = struct {
     fn make(object: anytype, func: anytype) VulkanDeleter {
         const T = @TypeOf(object);
         comptime {
-            std.debug.assert(@typeInfo(T) == .Optional);
-            const Ptr = @typeInfo(T).Optional.child;
-            std.debug.assert(@typeInfo(Ptr) == .Pointer);
-            std.debug.assert(@typeInfo(Ptr).Pointer.size == .One);
+            std.debug.assert(@typeInfo(T) == .optional);
+            const Ptr = @typeInfo(T).optional.child;
+            std.debug.assert(@typeInfo(Ptr) == .pointer);
+            std.debug.assert(@typeInfo(Ptr).pointer.size == .one);
 
             const Fn = @TypeOf(func);
-            std.debug.assert(@typeInfo(Fn) == .Fn);
+            std.debug.assert(@typeInfo(Fn) == .@"fn");
         }
 
         return VulkanDeleter {
@@ -1461,10 +1461,11 @@ fn upload_mesh(self: *Self, mesh: *Mesh) void {
 
     log.info("Created staging buffer {}", .{ @intFromPtr(mesh.vertex_buffer.buffer) });
 
-    var data: ?*align(@alignOf(mesh_mod.Vertex)) anyopaque = undefined;
+    var data: ?*anyopaque = undefined;
     check_vk(c.vmaMapMemory(self.vma_allocator, staging_buffer.allocation, &data))
         catch @panic("Failed to map vertex buffer");
-    @memcpy(@as([*]mesh_mod.Vertex, @ptrCast(data)), mesh.vertices);
+    const aligned_data: [*]mesh_mod.Vertex = @ptrCast(@alignCast(data));
+    @memcpy(aligned_data, mesh.vertices);
     c.vmaUnmapMemory(self.vma_allocator, staging_buffer.allocation);
 
     log.info("Copied mesh data into staging buffer", .{});
@@ -1752,7 +1753,7 @@ fn draw_objects(self: *Self, cmd: c.VkCommandBuffer, objects: []RenderObject) vo
     const camera_data_offset = padded_camera_data_size * frame_index;
     const scene_data_offset = scene_data_base_offset + padded_scene_data_size * frame_index;
 
-    var data: ?*align(@alignOf(GPUCameraData)) anyopaque = undefined;
+    var data: ?*anyopaque = undefined;
     check_vk(c.vmaMapMemory(self.vma_allocator, self.camera_and_scene_buffer.allocation, &data))
         catch @panic("Failed to map camera buffer");
 
@@ -1770,10 +1771,10 @@ fn draw_objects(self: *Self, cmd: c.VkCommandBuffer, objects: []RenderObject) vo
     // TODO: In the future we should mark all the math structure as extern, so
     // we can more easily pass them back and forth from C and do those kind of
     // conversions.
-    var object_data: ?*align(@alignOf(GPUObjectData)) anyopaque = undefined;
+    var object_data: ?*anyopaque = undefined;
     check_vk(c.vmaMapMemory(self.vma_allocator, self.get_current_frame().object_buffer.allocation, &object_data))
         catch @panic("Failed to map object buffer");
-    var object_data_arr: [*]GPUObjectData = @ptrCast(object_data orelse unreachable);
+    var object_data_arr: [*]GPUObjectData = @ptrCast(@alignCast(object_data orelse unreachable));
     for (objects, 0..) |object, index| {
         object_data_arr[index] = GPUObjectData{
             .model_matrix = object.transform,
@@ -1905,9 +1906,9 @@ pub fn immediate_submit(self: *Self, submit_ctx: anytype) void {
         var Context = @TypeOf(submit_ctx);
         var is_ptr = false;
         switch (@typeInfo(Context)) {
-            .Struct, .Union, .Enum => {},
-            .Pointer => |ptr| {
-                if (ptr.size != .One) {
+            .@"struct", .@"union", .@"enum" => {},
+            .pointer => |ptr| {
+                if (ptr.size != .one) {
                     @compileError("Context must be a type with a submit function. " ++ @typeName(Context) ++ "is a multi element pointer");
                 }
                 Context = ptr.child;
@@ -1928,19 +1929,19 @@ pub fn immediate_submit(self: *Self, submit_ctx: anytype) void {
         }
 
         const submit_fn_info=  @typeInfo(@TypeOf(Context.submit));
-        if (submit_fn_info != .Fn) {
+        if (submit_fn_info != .@"fn") {
             @compileError("Context submit method should be a function");
         }
 
-        if (submit_fn_info.Fn.params.len != 2) {
+        if (submit_fn_info.@"fn".params.len != 2) {
             @compileError("Context submit method should have two parameters");
         }
 
-        if (submit_fn_info.Fn.params[0].type != Context) {
+        if (submit_fn_info.@"fn".params[0].type != Context) {
             @compileError("Context submit method first parameter should be of type: " ++ @typeName(Context));
         }
 
-        if (submit_fn_info.Fn.params[1].type != c.VkCommandBuffer) {
+        if (submit_fn_info.@"fn".params[1].type != c.VkCommandBuffer) {
             @compileError("Context submit method second parameter should be of type: " ++ @typeName(c.VkCommandBuffer));
         }
     }
