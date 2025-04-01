@@ -2,9 +2,9 @@ const std = @import("std");
 
 // FIXME: This is a temporary hack to deal with fabs being renamed abs in 0.12.0.
 // Once 0.12 is officially released, we need to remove this
-pub fn abs(f: anytype) callconv(.Inline) @TypeOf(f) {
+pub inline fn abs(f: anytype) @TypeOf(f) {
     const type_info = @typeInfo(@TypeOf(f));
-    if (type_info != .float and type_info != .int) {
+    if (type_info != .Float and type_info != .int) {
         @compileError("Expected integer or floating point type");
     }
 
@@ -17,15 +17,14 @@ pub const Vec2 = struct {
 
     pub const ZERO = make(0.0, 0.0);
 
-    pub fn make(x: f32, y: f32) callconv(.Inline) Vec2 {
+    pub inline fn make(x: f32, y: f32) Vec2 {
         return .{ .x = x, .y = y };
     }
 
-    pub fn to_vec3(self: Vec2, z: f32) callconv(.Inline) Vec3 {
+    pub inline fn to_vec3(self: Vec2, z: f32) Vec3 {
         return .{ .x = self.x, .y = self.y, .z = z };
     }
 };
-
 
 pub const Vec3 = struct {
     x: f32,
@@ -36,23 +35,23 @@ pub const Vec3 = struct {
 
     pub const ZERO = make(0.0, 0.0, 0.0);
 
-    pub fn make(x: f32, y: f32, z: f32) callconv(.Inline) Self {
+    pub inline fn make(x: f32, y: f32, z: f32) Self {
         return .{ .x = x, .y = y, .z = z };
     }
 
-    pub fn to_point4(self: Self) callconv(.Inline) Vec4 {
+    pub inline fn to_point4(self: Self) Vec4 {
         return Vec4.make(self.x, self.y, self.z, 1.0);
     }
 
-    pub fn to_vector4(self: Self) callconv(.Inline) Vec4 {
+    pub inline fn to_vector4(self: Self) Vec4 {
         return Vec4.make(self.x, self.y, self.z, 0.0);
     }
 
-    pub fn to_vec4(self: Self, w: f32) callconv(.Inline) Vec4 {
+    pub inline fn to_vec4(self: Self, w: f32) Vec4 {
         return Vec4.make(self.x, self.y, self.z, w);
     }
 
-    pub fn squared_norm(self: Self) callconv(.Inline) f32 {
+    pub inline fn squared_norm(self: Self) f32 {
         return self.x * self.x + self.y * self.y + self.z * self.z;
     }
 
@@ -60,28 +59,28 @@ pub const Vec3 = struct {
         return @sqrt(self.x * self.x + self.y * self.y + self.z * self.z);
     }
 
-    pub fn add(self: Self, other: Self) callconv(.Inline) Self {
+    pub inline fn add(self: Self, other: Self) Self {
         return make(self.x + other.x, self.y + other.y, self.z + other.z);
     }
 
-    pub fn sub(self: Self, other: Self) callconv(.Inline) Self {
+    pub inline fn sub(self: Self, other: Self) Self {
         return make(self.x - other.x, self.y - other.y, self.z - other.z);
     }
 
-    pub fn mul(self: Self, other: f32) callconv(.Inline) Self {
+    pub inline fn mul(self: Self, other: f32) Self {
         return make(self.x * other, self.y * other, self.z * other);
     }
 
-    pub fn div(self: Self, other: f32) callconv(.Inline) Self {
+    pub inline fn div(self: Self, other: f32) Self {
         return make(self.x / other, self.y / other, self.z / other);
     }
 
-    pub fn normalized(self: Self) callconv(.Inline) Self {
+    pub inline fn normalized(self: Self) Self {
         const len = self.norm();
         return self.div(len);
     }
 
-    pub fn dot(a: Self, b: Self) callconv(.Inline) f32 {
+    pub inline fn dot(a: Self, b: Self) f32 {
         return a.x * b.x + a.y * b.y + a.z * b.z;
     }
 };
@@ -106,7 +105,7 @@ pub const Vec4 = struct {
 
     const Self = @This();
 
-    pub fn make(x: f32, y: f32, z: f32, w: f32) callconv(.Inline) Self {
+    pub inline fn make(x: f32, y: f32, z: f32, w: f32) Self {
         return .{ .x = x, .y = y, .z = z, .w = w };
     }
 
@@ -128,7 +127,7 @@ pub const Vec4 = struct {
         return Vec3.make(self.x, self.y, self.z);
     }
 
-    pub fn dot(a: Self, b: Self) callconv(.Inline) f32 {
+    pub inline fn dot(a: Self, b: Self) f32 {
         return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
     }
 };
@@ -148,7 +147,7 @@ pub const Mat4 = struct {
         Vec4.make(0.0, 0.0, 0.0, 1.0),
     );
 
-    pub fn make(i: Vec4, j: Vec4, k: Vec4, t: Vec4) callconv(.Inline) Self {
+    pub inline fn make(i: Vec4, j: Vec4, k: Vec4, t: Vec4) Self {
         return .{ .i = i, .j = j, .k = k, .t = t };
     }
 
