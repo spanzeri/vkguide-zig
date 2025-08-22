@@ -14,6 +14,25 @@ C/C++ dependencies:
  - Vulkan Memory Allocator: [AMD VMA](https://gpuopen.com/vulkan-memory-allocator/)
  - DearIMGUI: [Dear ImGui](https://github.com/ocornut/imgui)
 
+> [!NOTE]
+> ### Zig 0.15.0+ port (2025-08-22)
+> Porting to Zig 0.15.0 and master has been quite the ordeal.
+> Most of the changes to the language are for the best.
+>
+> However, removing `pub using namespace` has made dealing with C headers more of an headache.
+> Including them from multiple files causes multiple definitions.
+> Not doing so, means either manually exposing every export or duplicate the namespace name (e.g. `c.c.VkCreateInstance`).
+>
+> I ended up create manual bindings for all the c functions, structs and constants I use.
+> While this is possible, I would *strongly* recommend using bindings when they are available.
+
+>[!NOTE]
+> Currently, you might experience validation errors. Those are related to the recently introduced synchronization validation.
+>
+> The solution, is to have render semaphores on swapchain images rather than in-flight frames.
+>
+> I haven't had the chance to fix this yet, but I will as soon as I have some time.
+
 ### Note:
 I am not an experienced Zig programmer, and this code is not intended to be optimal or *idiomatic*.
 

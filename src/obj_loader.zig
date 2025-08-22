@@ -224,7 +224,7 @@ fn parse_values(ctx: *ParseContext, line: []const u8, values: []f32, type_name: 
     return count;
 }
 
-fn parse_vertex(ctx: *ParseContext, line: []const u8) callconv(.Inline) !void {
+inline fn parse_vertex(ctx: *ParseContext, line: []const u8) !void {
     var values = [4]f32{ 0.0, 0.0, 0.0, 1.0 };
     const read = try parse_values(ctx, line, values[0..], "vertex");
 
@@ -240,7 +240,7 @@ fn parse_vertex(ctx: *ParseContext, line: []const u8) callconv(.Inline) !void {
     try ctx.vertices.append(ctx.allocator, .{ values[0], values[1], values[2] });
 }
 
-fn parse_normal(ctx: *ParseContext, line: []const u8) callconv(.Inline) !void {
+inline fn parse_normal(ctx: *ParseContext, line: []const u8) !void {
     var values = [3]f32{ 0.0, 0.0, 0.0 };
     const read = try parse_values(ctx, line, values[0..], "normal");
 
@@ -252,7 +252,7 @@ fn parse_normal(ctx: *ParseContext, line: []const u8) callconv(.Inline) !void {
     try ctx.normals.append(ctx.allocator, .{ values[0], values[1], values[2] });
 }
 
-fn parse_texture_coords(ctx: *ParseContext, line: []const u8) callconv(.Inline) !void {
+inline fn parse_texture_coords(ctx: *ParseContext, line: []const u8) !void {
     var values = [4]f32{ 0.0, 0.0, 0.0, 0.0 };
     const read = try parse_values(ctx, line, values[0..], "texture coordinates");
 
@@ -263,7 +263,7 @@ fn parse_texture_coords(ctx: *ParseContext, line: []const u8) callconv(.Inline) 
     try ctx.uvs.append(ctx.allocator, values[0..2].*);
 }
 
-fn parse_face(ctx: *ParseContext, line: []const u8) callconv(.Inline) !void {
+inline fn parse_face(ctx: *ParseContext, line: []const u8) !void {
     var vertices_it = std.mem.tokenizeAny(u8, line, " \t");
     var vertices_count: u32 = 0;
     while (vertices_it.next()) |vertex| {
@@ -364,12 +364,12 @@ fn parse_face(ctx: *ParseContext, line: []const u8) callconv(.Inline) !void {
     try ctx.face_vertices.append(ctx.allocator, vertices_count);
 }
 
-fn parse_object(ctx: *ParseContext, line: []const u8) callconv(.Inline) !void {
+inline fn parse_object(ctx: *ParseContext, line: []const u8) !void {
     try add_current_object(ctx);
     ctx.object_name = std.mem.trim(u8, line, " \t\r");
 }
 
-fn parse_material(ctx: *ParseContext, line: []const u8) callconv(.Inline) !void {
+inline fn parse_material(ctx: *ParseContext, line: []const u8) !void {
     _ = line;
     log_warn(ctx, "Materials are not yet supported", .{});
 }
@@ -384,10 +384,10 @@ fn add_current_object(ctx: *ParseContext) !void {
     }
 }
 
-fn log_err(ctx: *ParseContext, comptime msg: []const u8, args: anytype) callconv(.Inline) void {
+inline fn log_err(ctx: *ParseContext, comptime msg: []const u8, args: anytype) void {
     log.err("{s}: {}: " ++ msg ++ "\nLine content: {s}",  .{ ctx.filename, ctx.line } ++ args ++ .{ ctx.line_content });
 }
 
-fn log_warn(ctx: *ParseContext, comptime msg: []const u8, args: anytype) callconv(.Inline) void {
+inline fn log_warn(ctx: *ParseContext, comptime msg: []const u8, args: anytype) void {
     log.warn("{s}: {}: " ++ msg, .{ ctx.filename, ctx.line } ++ args);
 }

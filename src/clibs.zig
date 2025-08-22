@@ -1,16 +1,4 @@
-//! Utility file that imports all the c libraries.
-//! Note that this needs to be done is a single place to avoid conflicts.
-//!
-//! pub usingnamespace means other files can include this as:
-//! ```const c = @import("clib");```
-//!
-//! SDL and vulkan types can then be referred in code as:
-//! ```
-//! c.SDL_CreateWindow(...);
-//! const ci = c.VkInstanceCreateInfo{...};
-//! ```
-
-pub usingnamespace @cImport({
+const c = @cImport({
     @cInclude("SDL3/SDL.h");
     @cInclude("SDL3/SDL_vulkan.h");
     @cInclude("vulkan/vulkan.h");
@@ -20,4 +8,538 @@ pub usingnamespace @cImport({
     @cInclude("cimgui_impl_vulkan.h");
     @cInclude("cimgui_impl_sdl3.h");
 });
+
+//
+// SDL types
+//
+
+pub const SDL = struct {
+    pub const Window = c.SDL_Window;
+    pub const Event = c.SDL_Event;
+    pub const Bool = c.SDL_bool;
+
+    pub const CreateWindow = c.SDL_CreateWindow;
+    pub const DestroyWindow = c.SDL_DestroyWindow;
+    pub const GetError = c.SDL_GetError;
+    pub const GetWindowSize = c.SDL_GetWindowSize;
+    pub const Init = c.SDL_Init;
+    pub const PollEvent = c.SDL_PollEvent;
+    pub const Quit = c.SDL_Quit;
+    pub const SetWindowTitle = c.SDL_SetWindowTitle;
+    pub const ShowWindow = c.SDL_ShowWindow;
+    pub const Vulkan_CreateSurface = c.SDL_Vulkan_CreateSurface;
+    pub const Vulkan_GetInstanceExtensions = c.SDL_Vulkan_GetInstanceExtensions;
+    pub const Vulkan_GetVkGetInstanceProcAddr = c.SDL_Vulkan_GetVkGetInstanceProcAddr;
+
+    pub const EVENT_KEY_DOWN = c.SDL_EVENT_KEY_DOWN;
+    pub const EVENT_KEY_UP = c.SDL_EVENT_KEY_UP;
+    pub const EVENT_QUIT = c.SDL_EVENT_QUIT;
+    pub const EVENT_WINDOW_MAXIMIZED = c.SDL_EVENT_WINDOW_MAXIMIZED;
+    pub const EVENT_WINDOW_MINIMIZED = c.SDL_EVENT_WINDOW_MINIMIZED;
+    pub const EVENT_WINDOW_RESIZED = c.SDL_EVENT_WINDOW_RESIZED;
+    pub const FALSE = c.SDL_FALSE;
+    pub const INIT_VIDEO = c.SDL_INIT_VIDEO;
+    pub const SCANCODE_A = c.SDL_SCANCODE_A;
+    pub const SCANCODE_D = c.SDL_SCANCODE_D;
+    pub const SCANCODE_E = c.SDL_SCANCODE_E;
+    pub const SCANCODE_ESCAPE = c.SDL_SCANCODE_ESCAPE;
+    pub const SCANCODE_M = c.SDL_SCANCODE_M;
+    pub const SCANCODE_Q = c.SDL_SCANCODE_Q;
+    pub const SCANCODE_S = c.SDL_SCANCODE_S;
+    pub const SCANCODE_SPACE = c.SDL_SCANCODE_SPACE;
+    pub const SCANCODE_W = c.SDL_SCANCODE_W;
+    pub const TRUE = c.SDL_TRUE;
+    pub const WINDOW_FULLSCREEN = c.SDL_WINDOW_FULLSCREEN;
+    pub const WINDOW_RESIZABLE = c.SDL_WINDOW_RESIZABLE;
+    pub const WINDOW_VULKAN = c.SDL_WINDOW_VULKAN;
+};
+
+//
+// VMA types
+//
+
+pub const vma = struct {
+    pub const Allocator = c.VmaAllocator;
+    pub const Allocation = c.VmaAllocation;
+    pub const AllocatorCreateInfo = c.VmaAllocatorCreateInfo;
+    pub const MemoryUsage = c.VmaMemoryUsage;
+    pub const AllocationCreateInfo = c.VmaAllocationCreateInfo;
+
+    pub const CreateAllocator = c.vmaCreateAllocator;
+    pub const DestroyAllocator = c.vmaDestroyAllocator;
+    pub const CreateBuffer = c.vmaCreateBuffer;
+    pub const DestroyBuffer = c.vmaDestroyBuffer;
+    pub const CreateImage = c.vmaCreateImage;
+    pub const DestroyImage = c.vmaDestroyImage;
+    pub const MapMemory = c.vmaMapMemory;
+    pub const UnmapMemory = c.vmaUnmapMemory;
+    pub const FlushAllocation = c.vmaFlushAllocation;
+
+    pub const MEMORY_USAGE_CPU_TO_GPU = c.VMA_MEMORY_USAGE_CPU_TO_GPU;
+    pub const MEMORY_USAGE_CPU_ONLY = c.VMA_MEMORY_USAGE_CPU_ONLY;
+    pub const MEMORY_USAGE_GPU_ONLY = c.VMA_MEMORY_USAGE_GPU_ONLY;
+};
+
+//
+// cimgui
+//
+
+pub const cimgui = struct {
+    pub const ImGuiContext = c.ImGuiContext;
+    pub const ImGuiIO = c.ImGuiIO;
+    pub const ImGuiStyle = c.ImGuiStyle;
+    pub const ImDrawData = c.ImDrawData;
+    pub const ImDrawList = c.ImDrawList;
+    pub const ImFontAtlas = c.ImFontAtlas;
+
+    pub const CreateContext = c.ImGui_CreateContext;
+    pub const DestroyContext = c.ImGui_DestroyContext;
+    pub const GetCurrentContext = c.ImGui_GetCurrentContext;
+    pub const SetCurrentContext = c.ImGui_SetCurrentContext;
+    pub const GetDrawData = c.ImGui_GetDrawData;
+
+    pub const Render = c.ImGui_Render;
+    pub const EndFrame = c.ImGui_EndFrame;
+    pub const ShowDemoWindow = c.ImGui_ShowDemoWindow;
+    pub const NewFrame = c.ImGui_NewFrame;
+
+    pub const impl_vulkan = struct {
+        pub const Init = c.cImGui_ImplVulkan_Init;
+        pub const Shutdown = c.cImGui_ImplVulkan_Shutdown;
+        pub const CreateFontsTexture = c.cImGui_ImplVulkan_CreateFontsTexture;
+        pub const NewFrame = c.cImGui_ImplVulkan_NewFrame;
+        pub const InitInfo = c.ImGui_ImplVulkan_InitInfo;
+        pub const RenderDrawData = c.cImGui_ImplVulkan_RenderDrawData;
+    };
+
+    pub const impl_sdl3 = struct {
+        pub const Init = c.cImGui_ImplSDL3_InitForVulkan;
+        pub const InitForVulkan = c.cImGui_ImplSDL3_InitForVulkan;
+        pub const Shutdown = c.cImGui_ImplSDL3_Shutdown;
+        pub const ProcessEvent = c.cImGui_ImplSDL3_ProcessEvent;
+        pub const NewFrame = c.cImGui_ImplSDL3_NewFrame;
+    };
+};
+
+//
+// Vulkan types
+//
+
+pub const vk = struct {
+    pub const AllocationCallbacks = c.VkAllocationCallbacks;
+    pub const Buffer = c.VkBuffer;
+    pub const BufferView = c.VkBufferView;
+    pub const CommandBuffer = c.VkCommandBuffer;
+    pub const CommandPool = c.VkCommandPool;
+    pub const CommandPoolCreateInfo = c.VkCommandPoolCreateInfo;
+    pub const CommandBufferAllocateInfo = c.VkCommandBufferAllocateInfo;
+    pub const DebugUtilsMessengerEXT = c.VkDebugUtilsMessengerEXT;
+    pub const DescriptorPool = c.VkDescriptorPool;
+    pub const DescriptorPoolSize = c.VkDescriptorPoolSize;
+    pub const DescriptorSet = c.VkDescriptorSet;
+    pub const DescriptorSetAllocateInfo = c.VkDescriptorSetAllocateInfo;
+    pub const DescriptorSetLayout = c.VkDescriptorSetLayout;
+    pub const DescriptorSetLayoutBinding = c.VkDescriptorSetLayoutBinding;
+    pub const Device = c.VkDevice;
+    pub const DeviceAddress = c.VkDeviceAddress;
+    pub const DeviceSize = c.VkDeviceSize;
+    pub const Fence = c.VkFence;
+    pub const Format = c.VkFormat;
+    pub const Framebuffer = c.VkFramebuffer;
+    pub const Image = c.VkImage;
+    pub const ImageView = c.VkImageView;
+    pub const Instance = c.VkInstance;
+    pub const InstanceCreateInfo = c.VkInstanceCreateInfo;
+    pub const PhysicalDevice = c.VkPhysicalDevice;
+    pub const PhysicalDeviceFeatures = c.VkPhysicalDeviceFeatures;
+    pub const PhysicalDeviceFeatures2 = c.VkPhysicalDeviceFeatures2;
+    pub const PhysicalDeviceMemoryProperties = c.VkPhysicalDeviceMemoryProperties;
+    pub const PhysicalDeviceProperties = c.VkPhysicalDeviceProperties;
+    pub const Pipeline = c.VkPipeline;
+    pub const PipelineLayout = c.VkPipelineLayout;
+    pub const Queue = c.VkQueue;
+    pub const QueueFamilyProperties = c.VkQueueFamilyProperties;
+    pub const QueueFamilyProperties2 = c.VkQueueFamilyProperties2;
+    pub const RenderPass = c.VkRenderPass;
+    pub const Result = c.VkResult;
+    pub const Semaphore = c.VkSemaphore;
+    pub const SurfaceKHR = c.VkSurfaceKHR;
+    pub const SwapchainKHR = c.VkSwapchainKHR;
+    pub const AttachmentDescription = c.VkAttachmentDescription;
+    pub const AttachmentReference = c.VkAttachmentReference;
+    pub const ClearValue = c.VkClearValue;
+    pub const CommandBufferBeginInfo = c.VkCommandBufferBeginInfo;
+    pub const SubpassDescription = c.VkSubpassDescription;
+    pub const SubpassDependency = c.VkSubpassDependency;
+    pub const RenderPassCreateInfo = c.VkRenderPassCreateInfo;
+    pub const FramebufferCreateInfo = c.VkFramebufferCreateInfo;
+    pub const SemaphoreCreateInfo = c.VkSemaphoreCreateInfo;
+    pub const FenceCreateInfo = c.VkFenceCreateInfo;
+    pub const DescriptorPoolCreateInfo = c.VkDescriptorPoolCreateInfo;
+    pub const DescriptorSetLayoutCreateInfo = c.VkDescriptorSetLayoutCreateInfo;
+    pub const ShaderModuleCreateInfo = c.VkShaderModuleCreateInfo;
+    pub const PipelineShaderStageCreateInfo = c.VkPipelineShaderStageCreateInfo;
+    pub const PipelineVertexInputStateCreateInfo = c.VkPipelineVertexInputStateCreateInfo;
+    pub const PipelineInputAssemblyStateCreateInfo = c.VkPipelineInputAssemblyStateCreateInfo;
+    pub const PipelineViewportStateCreateInfo = c.VkPipelineViewportStateCreateInfo;
+    pub const PipelineRasterizationStateCreateInfo = c.VkPipelineRasterizationStateCreateInfo;
+    pub const PipelineMultisampleStateCreateInfo = c.VkPipelineMultisampleStateCreateInfo;
+    pub const PipelineDepthStencilStateCreateInfo = c.VkPipelineDepthStencilStateCreateInfo;
+    pub const PipelineColorBlendAttachmentState = c.VkPipelineColorBlendAttachmentState;
+    pub const PipelineColorBlendStateCreateInfo = c.VkPipelineColorBlendStateCreateInfo;
+    pub const PipelineDynamicStateCreateInfo = c.VkPipelineDynamicStateCreateInfo;
+    pub const PipelineLayoutCreateInfo = c.VkPipelineLayoutCreateInfo;
+    pub const GraphicsPipelineCreateInfo = c.VkGraphicsPipelineCreateInfo;
+    pub const PresentInfoKHR = c.VkPresentInfoKHR;
+    pub const MemoryPropertyFlags = c.VkMemoryPropertyFlags;
+    pub const BufferUsageFlags = c.VkBufferUsageFlags;
+    pub const SharingMode = c.VkSharingMode;
+    pub const ShaderModule = c.VkShaderModule;
+    pub const Viewport = c.VkViewport;
+    pub const Rect2D = c.VkRect2D;
+    pub const DescriptorBufferInfo = c.VkDescriptorBufferInfo;
+    pub const WriteDescriptorSet = c.VkWriteDescriptorSet;
+    pub const PipelineBindPoint = c.VkPipelineBindPoint;
+    pub const BufferCreateInfo = c.VkBufferCreateInfo;
+    pub const RenderPassBeginInfo = c.VkRenderPassBeginInfo;
+    pub const SubmitInfo = c.VkSubmitInfo;
+    pub const BufferCopy = c.VkBufferCopy;
+    pub const ResetCommandPool = c.vkResetCommandPool;
+    pub const SamplerCreateInfo = c.VkSamplerCreateInfo;
+    pub const Sampler = c.VkSampler;
+    pub const DescriptorImageInfo = c.VkDescriptorImageInfo;
+    pub const VertexInputBindingDescription = c.VkVertexInputBindingDescription;
+    pub const VertexInputAttributeDescription = c.VkVertexInputAttributeDescription;
+    pub const PipelineVertexInputStateCreateFlags = c.VkPipelineVertexInputStateCreateFlags;
+    pub const PushConstantRange = c.VkPushConstantRange;
+    pub const Extent2D = c.VkExtent2D;
+    pub const Extent3D = c.VkExtent3D;
+    pub const ImageCreateInfo = c.VkImageCreateInfo;
+    pub const ImageViewCreateInfo = c.VkImageViewCreateInfo;
+    pub const ImageSubresourceRange = c.VkImageSubresourceRange;
+    pub const ImageMemoryBarrier = c.VkImageMemoryBarrier;
+    pub const BufferImageCopy = c.VkBufferImageCopy;
+    pub const LayerProperties = c.VkLayerProperties;
+    pub const ExtensionProperties = c.VkExtensionProperties;
+    pub const ApplicationInfo = c.VkApplicationInfo;
+    pub const Bool32 = c.VkBool32;
+    pub const SurfaceCapabilitiesKHR = c.VkSurfaceCapabilitiesKHR;
+    pub const SurfaceFormatKHR = c.VkSurfaceFormatKHR;
+    pub const PresentModeKHR = c.VkPresentModeKHR;
+    pub const SwapchainCreateInfoKHR = c.VkSwapchainCreateInfoKHR;
+    pub const PhysicalDeviceShaderDrawParametersFeatures = c.VkPhysicalDeviceShaderDrawParametersFeatures;
+    pub const DeviceQueueCreateInfo = c.VkDeviceQueueCreateInfo;
+    pub const DeviceCreateInfo = c.VkDeviceCreateInfo;
+    pub const ImageAspectFlags = c.VkImageAspectFlags;
+    pub const DebugUtilsMessengerCreateInfoEXT = c.VkDebugUtilsMessengerCreateInfoEXT;
+    pub const DebugUtilsMessageSeverityFlagsEXT = c.VkDebugUtilsMessageSeverityFlagsEXT;
+    pub const DebugUtilsMessageSeverityFlagBitsEXT = c.VkDebugUtilsMessageSeverityFlagBitsEXT;
+    pub const DebugUtilsMessageTypeFlagsEXT = c.VkDebugUtilsMessageTypeFlagsEXT;
+    pub const DebugUtilsMessageTypeFlagBitsEXT = c.VkDebugUtilsMessageTypeFlagBitsEXT;
+    pub const DebugUtilsMessengerCallbackDataEXT = c.VkDebugUtilsMessengerCallbackDataEXT;
+
+    pub const PFN_GetInstanceProcAddr = c.PFN_vkGetInstanceProcAddr;
+    pub const PFN_DebugUtilsMessengerCallbackEXT = c.PFN_vkDebugUtilsMessengerCallbackEXT;
+    pub const PFN_CreateDebugUtilsMessengerEXT = c.PFN_vkCreateDebugUtilsMessengerEXT;
+    pub const PFN_DestroyDebugUtilsMessengerEXT = c.PFN_vkDestroyDebugUtilsMessengerEXT;
+
+    pub const MAKE_VERSION = c.VK_MAKE_VERSION;
+    pub const TRUE = c.VK_TRUE;
+    pub const FALSE = c.VK_FALSE;
+    pub const SUCCESS = c.VK_SUCCESS;
+    pub const NOT_READY = c.VK_NOT_READY;
+    pub const TIMEOUT = c.VK_TIMEOUT;
+    pub const EVENT_SET = c.VK_EVENT_SET;
+    pub const EVENT_RESET = c.VK_EVENT_RESET;
+    pub const INCOMPLETE = c.VK_INCOMPLETE;
+    pub const ERROR_OUT_OF_HOST_MEMORY = c.VK_ERROR_OUT_OF_HOST_MEMORY;
+    pub const ERROR_OUT_OF_DEVICE_MEMORY = c.VK_ERROR_OUT_OF_DEVICE_MEMORY;
+    pub const ERROR_INITIALIZATION_FAILED = c.VK_ERROR_INITIALIZATION_FAILED;
+    pub const ERROR_DEVICE_LOST = c.VK_ERROR_DEVICE_LOST;
+    pub const ERROR_MEMORY_MAP_FAILED = c.VK_ERROR_MEMORY_MAP_FAILED;
+    pub const ERROR_LAYER_NOT_PRESENT = c.VK_ERROR_LAYER_NOT_PRESENT;
+    pub const ERROR_EXTENSION_NOT_PRESENT = c.VK_ERROR_EXTENSION_NOT_PRESENT;
+    pub const ERROR_FEATURE_NOT_PRESENT = c.VK_ERROR_FEATURE_NOT_PRESENT;
+    pub const ERROR_INCOMPATIBLE_DRIVER = c.VK_ERROR_INCOMPATIBLE_DRIVER;
+    pub const ERROR_TOO_MANY_OBJECTS = c.VK_ERROR_TOO_MANY_OBJECTS;
+    pub const ERROR_FORMAT_NOT_SUPPORTED = c.VK_ERROR_FORMAT_NOT_SUPPORTED;
+    pub const ERROR_FRAGMENTED_POOL = c.VK_ERROR_FRAGMENTED_POOL;
+    pub const ERROR_UNKNOWN = c.VK_ERROR_UNKNOWN;
+    pub const ERROR_OUT_OF_POOL_MEMORY = c.VK_ERROR_OUT_OF_POOL_MEMORY;
+    pub const ERROR_INVALID_EXTERNAL_HANDLE = c.VK_ERROR_INVALID_EXTERNAL_HANDLE;
+    pub const ERROR_FRAGMENTATION = c.VK_ERROR_FRAGMENTATION;
+    pub const ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS = c.VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS;
+    pub const PIPELINE_COMPILE_REQUIRED = c.VK_PIPELINE_COMPILE_REQUIRED;
+    pub const ERROR_SURFACE_LOST_KHR = c.VK_ERROR_SURFACE_LOST_KHR;
+    pub const ERROR_NATIVE_WINDOW_IN_USE_KHR = c.VK_ERROR_NATIVE_WINDOW_IN_USE_KHR;
+    pub const SUBOPTIMAL_KHR = c.VK_SUBOPTIMAL_KHR;
+    pub const ERROR_OUT_OF_DATE_KHR = c.VK_ERROR_OUT_OF_DATE_KHR;
+    pub const ERROR_INCOMPATIBLE_DISPLAY_KHR = c.VK_ERROR_INCOMPATIBLE_DISPLAY_KHR;
+    pub const ERROR_VALIDATION_FAILED_EXT = c.VK_ERROR_VALIDATION_FAILED_EXT;
+    pub const ERROR_INVALID_SHADER_NV = c.VK_ERROR_INVALID_SHADER_NV;
+    pub const ERROR_IMAGE_USAGE_NOT_SUPPORTED_KHR = c.VK_ERROR_IMAGE_USAGE_NOT_SUPPORTED_KHR;
+    pub const ERROR_VIDEO_PICTURE_LAYOUT_NOT_SUPPORTED_KHR = c.VK_ERROR_VIDEO_PICTURE_LAYOUT_NOT_SUPPORTED_KHR;
+    pub const ERROR_VIDEO_PROFILE_OPERATION_NOT_SUPPORTED_KHR = c.VK_ERROR_VIDEO_PROFILE_OPERATION_NOT_SUPPORTED_KHR;
+    pub const ERROR_VIDEO_PROFILE_FORMAT_NOT_SUPPORTED_KHR = c.VK_ERROR_VIDEO_PROFILE_FORMAT_NOT_SUPPORTED_KHR;
+    pub const ERROR_VIDEO_PROFILE_CODEC_NOT_SUPPORTED_KHR = c.VK_ERROR_VIDEO_PROFILE_CODEC_NOT_SUPPORTED_KHR;
+    pub const ERROR_VIDEO_STD_VERSION_NOT_SUPPORTED_KHR = c.VK_ERROR_VIDEO_STD_VERSION_NOT_SUPPORTED_KHR;
+    pub const ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT = c.VK_ERROR_INVALID_DRM_FORMAT_MODIFIER_PLANE_LAYOUT_EXT;
+    pub const ERROR_NOT_PERMITTED_KHR = c.VK_ERROR_NOT_PERMITTED_KHR;
+    pub const ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT = c.VK_ERROR_FULL_SCREEN_EXCLUSIVE_MODE_LOST_EXT;
+    pub const THREAD_IDLE_KHR = c.VK_THREAD_IDLE_KHR;
+    pub const THREAD_DONE_KHR = c.VK_THREAD_DONE_KHR;
+    pub const OPERATION_DEFERRED_KHR = c.VK_OPERATION_DEFERRED_KHR;
+    pub const OPERATION_NOT_DEFERRED_KHR = c.VK_OPERATION_NOT_DEFERRED_KHR;
+    pub const ERROR_COMPRESSION_EXHAUSTED_EXT = c.VK_ERROR_COMPRESSION_EXHAUSTED_EXT;
+    pub const ERROR_INCOMPATIBLE_SHADER_BINARY_EXT = c.VK_ERROR_INCOMPATIBLE_SHADER_BINARY_EXT;
+    pub const STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO = c.VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    pub const STRUCTURE_TYPE_INSTANCE_CREATE_INFO = c.VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    pub const STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    pub const STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT = c.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT;
+    pub const STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO = c.VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    pub const STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO = c.VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+    pub const STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO = c.VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    pub const STRUCTURE_TYPE_FENCE_CREATE_INFO = c.VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+    pub const STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO = c.VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    pub const STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    pub const STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO = c.VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    pub const STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pub const STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    pub const STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    pub const STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    pub const STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    pub const STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    pub const STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    pub const STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    pub const STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    pub const STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO = c.VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    pub const STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO = c.VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pub const STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO = c.VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    pub const STRUCTURE_TYPE_PRESENT_INFO_KHR = c.VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    pub const STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO = c.VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    pub const STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET = c.VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    pub const STRUCTURE_TYPE_BUFFER_CREATE_INFO = c.VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    pub const STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO = c.VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    pub const STRUCTURE_TYPE_SUBMIT_INFO = c.VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    pub const STRUCTURE_TYPE_SAMPLER_CREATE_INFO = c.VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    pub const STRUCTURE_TYPE_IMAGE_CREATE_INFO = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    pub const STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    pub const STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER = c.VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    pub const STRUCTURE_TYPE_BUFFER_IMAGE_COPY = c.VK_STRUCTURE_TYPE_BUFFER_IMAGE_COPY;
+    pub const STRUCTURE_TYPE_APPLICATION_INFO = c.VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    pub const STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR = c.VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+    pub const STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES = c.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_DRAW_PARAMETERS_FEATURES;
+    pub const STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO = c.VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+    pub const STRUCTURE_TYPE_DEVICE_CREATE_INFO = c.VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+    pub const STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO = c.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO;
+    pub const QUEUE_FAMILY_IGNORED = c.VK_QUEUE_FAMILY_IGNORED;
+    pub const COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT = c.VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+    pub const COMMAND_BUFFER_LEVEL_PRIMARY = c.VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    pub const COMMAND_BUFFER_LEVEL_SECONDARY = c.VK_COMMAND_BUFFER_LEVEL_SECONDARY;
+    pub const COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    pub const SAMPLE_COUNT_1_BIT = c.VK_SAMPLE_COUNT_1_BIT;
+    pub const ATTACHMENT_LOAD_OP_CLEAR = c.VK_ATTACHMENT_LOAD_OP_CLEAR;
+    pub const ATTACHMENT_STORE_OP_STORE = c.VK_ATTACHMENT_STORE_OP_STORE;
+    pub const ATTACHMENT_LOAD_OP_DONT_CARE = c.VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    pub const ATTACHMENT_STORE_OP_DONT_CARE = c.VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    pub const IMAGE_LAYOUT_UNDEFINED = c.VK_IMAGE_LAYOUT_UNDEFINED;
+    pub const IMAGE_LAYOUT_PRESENT_SRC_KHR = c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    pub const IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    pub const IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL = c.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    pub const PIPELINE_BIND_POINT_GRAPHICS = c.VK_PIPELINE_BIND_POINT_GRAPHICS;
+    pub const PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT = c.VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    pub const PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT = c.VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    pub const PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT = c.VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+    pub const ACCESS_COLOR_ATTACHMENT_WRITE_BIT = c.VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    pub const ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT = c.VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    pub const SUBPASS_EXTERNAL = c.VK_SUBPASS_EXTERNAL;
+    pub const FENCE_CREATE_SIGNALED_BIT = c.VK_FENCE_CREATE_SIGNALED_BIT;
+    pub const DESCRIPTOR_TYPE_UNIFORM_BUFFER = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    pub const DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER = c.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    pub const DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC = c.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    pub const DESCRIPTOR_TYPE_STORAGE_BUFFER = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    pub const DESCRIPTOR_TYPE_SAMPLER = c.VK_DESCRIPTOR_TYPE_SAMPLER;
+    pub const DESCRIPTOR_TYPE_STORAGE_IMAGE = c.VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    pub const DESCRIPTOR_TYPE_SAMPLED_IMAGE = c.VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    pub const DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER = c.VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER;
+    pub const DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER = c.VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER;
+    pub const DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC = c.VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC;
+    pub const DESCRIPTOR_TYPE_INPUT_ATTACHMENT = c.VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    pub const SHADER_STAGE_VERTEX_BIT = c.VK_SHADER_STAGE_VERTEX_BIT;
+    pub const SHADER_STAGE_FRAGMENT_BIT = c.VK_SHADER_STAGE_FRAGMENT_BIT;
+    pub const SHADER_STAGE_COMPUTE_BIT = c.VK_SHADER_STAGE_COMPUTE_BIT;
+    pub const PRIMITIVE_TOPOLOGY_TRIANGLE_LIST = c.VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    pub const CULL_MODE_NONE = c.VK_CULL_MODE_NONE;
+    pub const CULL_MODE_BACK_BIT = c.VK_CULL_MODE_BACK_BIT;
+    pub const CULL_MODE_FRONT_BIT = c.VK_CULL_MODE_FRONT_BIT;
+    pub const FRONT_FACE_CLOCKWISE = c.VK_FRONT_FACE_CLOCKWISE;
+    pub const POLYGON_MODE_FILL = c.VK_POLYGON_MODE_FILL;
+    pub const DYNAMIC_STATE_VIEWPORT = c.VK_DYNAMIC_STATE_VIEWPORT;
+    pub const DYNAMIC_STATE_SCISSOR = c.VK_DYNAMIC_STATE_SCISSOR;
+    pub const COMPARE_OP_LESS = c.VK_COMPARE_OP_LESS;
+    pub const COMPARE_OP_LESS_OR_EQUAL = c.VK_COMPARE_OP_LESS_OR_EQUAL;
+    pub const COMPARE_OP_GREATER = c.VK_COMPARE_OP_GREATER;
+    pub const MEMORY_PROPERTY_HOST_VISIBLE_BIT = c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+    pub const MEMORY_PROPERTY_HOST_COHERENT_BIT = c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    pub const MEMORY_PROPERTY_DEVICE_LOCAL_BIT = c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    pub const BUFFER_USAGE_VERTEX_BUFFER_BIT = c.VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    pub const BUFFER_USAGE_INDEX_BUFFER_BIT = c.VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    pub const BUFFER_USAGE_UNIFORM_BUFFER_BIT = c.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    pub const BUFFER_USAGE_STORAGE_BUFFER_BIT = c.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    pub const BUFFER_USAGE_TRANSFER_SRC_BIT = c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    pub const BUFFER_USAGE_TRANSFER_DST_BIT = c.VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    pub const COLOR_COMPONENT_R_BIT = c.VK_COLOR_COMPONENT_R_BIT;
+    pub const COLOR_COMPONENT_G_BIT = c.VK_COLOR_COMPONENT_G_BIT;
+    pub const COLOR_COMPONENT_B_BIT = c.VK_COLOR_COMPONENT_B_BIT;
+    pub const COLOR_COMPONENT_A_BIT = c.VK_COLOR_COMPONENT_A_BIT;
+    pub const LOGIC_OP_COPY = c.VK_LOGIC_OP_COPY;
+    pub const DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT = c.VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    pub const SUBPASS_CONTENTS_INLINE = c.VK_SUBPASS_CONTENTS_INLINE;
+    pub const FILTER_LINEAR = c.VK_FILTER_LINEAR;
+    pub const FILTER_NEAREST = c.VK_FILTER_NEAREST;
+    pub const SAMPLER_ADDRESS_MODE_REPEAT = c.VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    pub const SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE = c.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    pub const SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT = c.VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+    pub const SHADER_READ_ONLY_OPTIMAL = c.VK_SHADER_READ_ONLY_OPTIMAL;
+    pub const IMAGE_TILING_OPTIMAL = c.VK_IMAGE_TILING_OPTIMAL;
+    pub const IMAGE_USAGE_SAMPLED_BIT = c.VK_IMAGE_USAGE_SAMPLED_BIT;
+    pub const IMAGE_USAGE_COLOR_ATTACHMENT_BIT = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    pub const IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL = c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    pub const IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL = c.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    pub const IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT = c.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    pub const IMAGE_USAGE_TRANSFER_DST_BIT = c.VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    pub const IMAGE_USAGE_TRANSFER_SRC_BIT = c.VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    pub const VERTEX_INPUT_RATE_VERTEX = c.VK_VERTEX_INPUT_RATE_VERTEX;
+    pub const FORMAT_R32G32B32_SFLOAT = c.VK_FORMAT_R32G32B32_SFLOAT;
+    pub const FORMAT_R32G32_SFLOAT = c.VK_FORMAT_R32G32_SFLOAT;
+    pub const FORMAT_B8G8R8A8_SRGB = c.VK_FORMAT_B8G8R8A8_SRGB;
+    pub const FORMAT_D32_SFLOAT = c.VK_FORMAT_D32_SFLOAT;
+    pub const FORMAT_D24_UNORM_S8_UINT = c.VK_FORMAT_D24_UNORM_S8_UINT;
+    pub const FORMAT_R8G8B8A8_SRGB = c.VK_FORMAT_R8G8B8A8_SRGB;
+    pub const IMAGE_TYPE_2D = c.VK_IMAGE_TYPE_2D;
+    pub const IMAGE_VIEW_TYPE_2D = c.VK_IMAGE_VIEW_TYPE_2D;
+    pub const COMPONENT_SWIZZLE_IDENTITY = c.VK_COMPONENT_SWIZZLE_IDENTITY;
+    pub const IMAGE_ASPECT_COLOR_BIT = c.VK_IMAGE_ASPECT_COLOR_BIT;
+    pub const IMAGE_ASPECT_DEPTH_BIT = c.VK_IMAGE_ASPECT_DEPTH_BIT;
+    pub const ACCESS_TRANSFER_WRITE_BIT = c.VK_ACCESS_TRANSFER_WRITE_BIT;
+    pub const ACCESS_SHADER_READ_BIT = c.VK_ACCESS_SHADER_READ_BIT;
+    pub const PIPELINE_STAGE_TOP_OF_PIPE_BIT = c.VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    pub const PIPELINE_STAGE_TRANSFER_BIT = c.VK_PIPELINE_STAGE_TRANSFER_BIT;
+    pub const PIPELINE_STAGE_FRAGMENT_SHADER_BIT = c.VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    pub const QUEUE_GRAPHICS_BIT = c.VK_QUEUE_GRAPHICS_BIT;
+    pub const QUEUE_COMPUTE_BIT = c.VK_QUEUE_COMPUTE_BIT;
+    pub const QUEUE_TRANSFER_BIT = c.VK_QUEUE_TRANSFER_BIT;
+    pub const COLOR_SPACE_SRGB_NONLINEAR_KHR = c.VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    pub const PRESENT_MODE_FIFO_KHR = c.VK_PRESENT_MODE_FIFO_KHR;
+    pub const PRESENT_MODE_MAILBOX_KHR = c.VK_PRESENT_MODE_MAILBOX_KHR;
+    pub const PRESENT_MODE_IMMEDIATE_KHR = c.VK_PRESENT_MODE_IMMEDIATE_KHR;
+    pub const SHARING_MODE_EXCLUSIVE = c.VK_SHARING_MODE_EXCLUSIVE;
+    pub const SHARING_MODE_CONCURRENT = c.VK_SHARING_MODE_CONCURRENT;
+    pub const COMPOSITE_ALPHA_OPAQUE_BIT_KHR = c.VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    pub const PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU = c.VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU;
+    pub const PHYSICAL_DEVICE_TYPE_DISCRETE_GPU = c.VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+    pub const PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU = c.VK_PHYSICAL_DEVICE_TYPE_VIRTUAL_GPU;
+    pub const PHYSICAL_DEVICE_TYPE_CPU = c.VK_PHYSICAL_DEVICE_TYPE_CPU;
+    pub const DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT;
+    pub const DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT;
+    pub const DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT;
+    pub const DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    pub const DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT;
+    pub const DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT;
+    pub const DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT = c.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+
+    pub const CreateCommandPool = c.vkCreateCommandPool;
+    pub const DestroyCommandPool = c.vkDestroyCommandPool;
+    pub const DestroyInstance = c.vkDestroyInstance;
+    pub const DestroySurfaceKHR = c.vkDestroySurfaceKHR;
+    pub const DeviceWaitIdle = c.vkDeviceWaitIdle;
+    pub const WaitForFences = c.vkWaitForFences;
+    pub const ResetFences = c.vkResetFences;
+    pub const CreateInstance = c.vkCreateInstance;
+    pub const EnumerateInstanceExtensionProperties = c.vkEnumerateInstanceExtensionProperties;
+    pub const EnumerateDeviceExtensionProperties = c.vkEnumerateDeviceExtensionProperties;
+    pub const EnumerateInstanceLayerProperties = c.vkEnumerateInstanceLayerProperties;
+    pub const AcquireNextImageKHR = c.vkAcquireNextImageKHR;
+    pub const EnumerateInstanceVersion = c.vkEnumerateInstanceVersion;
+    pub const EnumeratePhysicalDevices = c.vkEnumeratePhysicalDevices;
+    pub const AllocateCommandBuffers = c.vkAllocateCommandBuffers;
+    pub const FreeCommandBuffers = c.vkFreeCommandBuffers;
+    pub const CreateDebugUtilsMessengerEXT = c.vkCreateDebugUtilsMessengerEXT;
+    pub const DestroyDebugUtilsMessengerEXT = c.vkDestroyDebugUtilsMessengerEXT;
+    pub const GetPhysicalDeviceFeatures = c.vkGetPhysicalDeviceFeatures;
+    pub const GetPhysicalDeviceFeatures2 = c.vkGetPhysicalDeviceFeatures2;
+    pub const CreateRenderPass = c.vkCreateRenderPass;
+    pub const DestroyRenderPass = c.vkDestroyRenderPass;
+    pub const CreateFramebuffer = c.vkCreateFramebuffer;
+    pub const DestroyFramebuffer = c.vkDestroyFramebuffer;
+    pub const CreateSemaphore = c.vkCreateSemaphore;
+    pub const DestroySemaphore = c.vkDestroySemaphore;
+    pub const CreateFence = c.vkCreateFence;
+    pub const DestroyFence = c.vkDestroyFence;
+    pub const ResetCommandBuffer = c.vkResetCommandBuffer;
+    pub const CreateDescriptorPool = c.vkCreateDescriptorPool;
+    pub const DestroyDescriptorPool = c.vkDestroyDescriptorPool;
+    pub const AllocateDescriptorSets = c.vkAllocateDescriptorSets;
+    pub const FreeDescriptorSets = c.vkFreeDescriptorSets;
+    pub const CreateDescriptorSetLayout = c.vkCreateDescriptorSetLayout;
+    pub const DestroyDescriptorSetLayout = c.vkDestroyDescriptorSetLayout;
+    pub const CreateShaderModule = c.vkCreateShaderModule;
+    pub const DestroyShaderModule = c.vkDestroyShaderModule;
+    pub const CreateGraphicsPipelines = c.vkCreateGraphicsPipelines;
+    pub const DestroyPipeline = c.vkDestroyPipeline;
+    pub const CreatePipelineLayout = c.vkCreatePipelineLayout;
+    pub const DestroyPipelineLayout = c.vkDestroyPipelineLayout;
+    pub const BeginCommandBuffer = c.vkBeginCommandBuffer;
+    pub const EndCommandBuffer = c.vkEndCommandBuffer;
+    pub const CmdBeginRenderPass = c.vkCmdBeginRenderPass;
+    pub const CmdEndRenderPass = c.vkCmdEndRenderPass;
+    pub const CmdBindPipeline = c.vkCmdBindPipeline;
+    pub const CmdSetViewport = c.vkCmdSetViewport;
+    pub const CmdSetScissor = c.vkCmdSetScissor;
+    pub const CmdBindVertexBuffers = c.vkCmdBindVertexBuffers;
+    pub const CmdBindIndexBuffer = c.vkCmdBindIndexBuffer;
+    pub const CmdDraw = c.vkCmdDraw;
+    pub const CmdDrawIndexed = c.vkCmdDrawIndexed;
+    pub const CmdCopyBuffer = c.vkCmdCopyBuffer;
+    pub const CmdBindDescriptorSets = c.vkCmdBindDescriptorSets;
+    pub const CmdPushConstants = c.vkCmdPushConstants;
+    pub const CmdPipelineBarrier = c.vkCmdPipelineBarrier;
+    pub const CmdCopyBufferToImage = c.vkCmdCopyBufferToImage;
+    pub const UpdateDescriptorSets = c.vkUpdateDescriptorSets;
+    pub const QueueSubmit = c.vkQueueSubmit;
+    pub const QueuePresentKHR = c.vkQueuePresentKHR;
+    pub const CreateSampler = c.vkCreateSampler;
+    pub const DestroySampler = c.vkDestroySampler;
+    pub const CreateImageView = c.vkCreateImageView;
+    pub const DestroyImageView = c.vkDestroyImageView;
+    pub const GetPhysicalDeviceMemoryProperties = c.vkGetPhysicalDeviceMemoryProperties;
+    pub const GetPhysicalDeviceProperties = c.vkGetPhysicalDeviceProperties;
+    pub const GetPhysicalDeviceQueueFamilyProperties = c.vkGetPhysicalDeviceQueueFamilyProperties;
+    pub const GetPhysicalDeviceSurfaceSupportKHR = c.vkGetPhysicalDeviceSurfaceSupportKHR;
+    pub const GetPhysicalDeviceSurfaceCapabilitiesKHR = c.vkGetPhysicalDeviceSurfaceCapabilitiesKHR;
+    pub const GetPhysicalDeviceSurfaceFormatsKHR = c.vkGetPhysicalDeviceSurfaceFormatsKHR;
+    pub const GetPhysicalDeviceSurfacePresentModesKHR = c.vkGetPhysicalDeviceSurfacePresentModesKHR;
+    pub const CreateSwapchainKHR = c.vkCreateSwapchainKHR;
+    pub const DestroySwapchainKHR = c.vkDestroySwapchainKHR;
+    pub const GetSwapchainImagesKHR = c.vkGetSwapchainImagesKHR;
+    pub const CreateBuffer = c.vkCreateBuffer;
+    pub const DestroyBuffer = c.vkDestroyBuffer;
+    pub const CreateDevice = c.vkCreateDevice;
+    pub const DestroyDevice = c.vkDestroyDevice;
+    pub const GetDeviceQueue = c.vkGetDeviceQueue;
+    pub const AllocateMemory = c.vkAllocateMemory;
+    pub const FreeMemory = c.vkFreeMemory;
+    pub const BindBufferMemory = c.vkBindBufferMemory;
+    pub const BindImageMemory = c.vkBindImageMemory;
+    pub const MapMemory = c.vkMapMemory;
+    pub const UnmapMemory = c.vkUnmapMemory;
+};
+
+pub const stbi = struct {
+    pub const load = c.stbi_load;
+    pub const load_from_memory = c.stbi_load_from_memory;
+    pub const image_free = c.stbi_image_free;
+
+    pub const rgb_alpha = c.STBI_rgb_alpha;
+};
 

@@ -7,9 +7,13 @@ pub fn build(b: *std.Build) !void {
 
     const exe = b.addExecutable(.{
         .name = "vkguide-zig",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.addModule(
+            "vkguide-zig",
+            .{
+                .root_source_file = b.path("src/main.zig"),
+                .target = target,
+                .optimize = optimize,
+            }),
     });
 
     const vk_lib_name = if (target.result.os.tag == .windows) "vulkan-1" else "vulkan";
@@ -42,10 +46,14 @@ pub fn build(b: *std.Build) !void {
     }
 
     // Imgui (with cimgui and vulkan + sdl3 backends)
-    const imgui_lib = b.addStaticLibrary(.{
+    const imgui_lib = b.addLibrary(.{
+        .linkage = .static,
         .name = "cimgui",
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.addModule("cimgui", .{
+            .root_source_file = null,
+            .target = target,
+            .optimize = optimize,
+        }),
     });
     imgui_lib.addIncludePath(b.path("thirdparty/imgui/"));
     imgui_lib.addIncludePath(b.path("thirdparty/sdl3/include/"));
@@ -84,9 +92,11 @@ pub fn build(b: *std.Build) !void {
     run_step.dependOn(&run_cmd.step);
 
     const unit_tests = b.addTest(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.addModule("vkguide-zig-tests", .{
+            .root_source_file = b.path("src/tests.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     const run_unit_tests = b.addRunArtifact(unit_tests);

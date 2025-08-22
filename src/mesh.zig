@@ -7,10 +7,10 @@ const Vec2 = m3d.Vec2;
 const Vec3 = m3d.Vec3;
 
 pub const VertexInputDescription = struct {
-    bindings: []const c.VkVertexInputBindingDescription,
-    attributes: []const c.VkVertexInputAttributeDescription,
+    bindings: []const c.vk.VertexInputBindingDescription,
+    attributes: []const c.vk.VertexInputAttributeDescription,
 
-    flags: c.VkPipelineVertexInputStateCreateFlags = 0,
+    flags: c.vk.PipelineVertexInputStateCreateFlags = 0,
 };
 
 pub const Vertex = struct {
@@ -21,35 +21,35 @@ pub const Vertex = struct {
 
     pub const vertex_input_description = VertexInputDescription{
         .bindings = &.{
-            std.mem.zeroInit(c.VkVertexInputBindingDescription, .{
+            std.mem.zeroInit(c.vk.VertexInputBindingDescription, .{
                 .binding = 0,
                 .stride = @sizeOf(Vertex),
-                .inputRate = c.VK_VERTEX_INPUT_RATE_VERTEX,
+                .inputRate = c.vk.VERTEX_INPUT_RATE_VERTEX,
             }),
         },
         .attributes = &.{
-            std.mem.zeroInit(c.VkVertexInputAttributeDescription, .{
+            std.mem.zeroInit(c.vk.VertexInputAttributeDescription, .{
                 .location = 0,
                 .binding = 0,
-                .format = c.VK_FORMAT_R32G32B32_SFLOAT,
+                .format = c.vk.FORMAT_R32G32B32_SFLOAT,
                 .offset = @offsetOf(Vertex, "position"),
             }),
-            std.mem.zeroInit(c.VkVertexInputAttributeDescription, .{
+            std.mem.zeroInit(c.vk.VertexInputAttributeDescription, .{
                 .location = 1,
                 .binding = 0,
-                .format = c.VK_FORMAT_R32G32B32_SFLOAT,
+                .format = c.vk.FORMAT_R32G32B32_SFLOAT,
                 .offset = @offsetOf(Vertex, "normal"),
             }),
-            std.mem.zeroInit(c.VkVertexInputAttributeDescription, .{
+            std.mem.zeroInit(c.vk.VertexInputAttributeDescription, .{
                 .location = 2,
                 .binding = 0,
-                .format = c.VK_FORMAT_R32G32B32_SFLOAT,
+                .format = c.vk.FORMAT_R32G32B32_SFLOAT,
                 .offset = @offsetOf(Vertex, "color"),
             }),
-            std.mem.zeroInit(c.VkVertexInputAttributeDescription, .{
+            std.mem.zeroInit(c.vk.VertexInputAttributeDescription, .{
                 .location = 3,
                 .binding = 0,
-                .format = c.VK_FORMAT_R32G32_SFLOAT,
+                .format = c.vk.FORMAT_R32G32_SFLOAT,
                 .offset = @offsetOf(Vertex, "uv"),
             }),
         },
@@ -70,7 +70,7 @@ pub fn load_from_obj(a: std.mem.Allocator, filepath: []const u8) Mesh {
     };
     defer obj_mesh.deinit();
 
-    var vertices = std.ArrayList(Vertex).init(a);
+    var vertices = std.ArrayList(Vertex){};
 
     for (obj_mesh.objects) |object| {
         var index_count: usize = 0;
@@ -96,11 +96,11 @@ pub fn load_from_obj(a: std.mem.Allocator, filepath: []const u8) Mesh {
                 if (vx_index > 2) {
                     const v0 = vertices.items[vertices.items.len - 3];
                     const v1 = vertices.items[vertices.items.len - 1];
-                    vertices.append(v0) catch @panic("OOM");
-                    vertices.append(v1) catch @panic("OOM");
+                    vertices.append(a, v0) catch @panic("OOM");
+                    vertices.append(a, v1) catch @panic("OOM");
                 }
 
-                vertices.append(vx) catch @panic("OOM");
+                vertices.append(a, vx) catch @panic("OOM");
 
                 index_count += 1;
             }
@@ -108,6 +108,6 @@ pub fn load_from_obj(a: std.mem.Allocator, filepath: []const u8) Mesh {
     }
 
     return Mesh{
-        .vertices = vertices.toOwnedSlice() catch @panic("Failed to make owned slice"),
+        .vertices = vertices.toOwnedSlice(a) catch @panic("Failed to make owned slice"),
     };
 }
