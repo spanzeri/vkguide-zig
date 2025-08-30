@@ -48,8 +48,7 @@ const RenderObject = struct {
 };
 
 const FrameData = struct {
-    present_semaphore: c.vk.Semaphore = VK_NULL_HANDLE,
-    render_semaphore: c.vk.Semaphore = VK_NULL_HANDLE,
+    swapchain_semaphore: c.vk.Semaphore = VK_NULL_HANDLE,
     render_fence: c.vk.Fence = VK_NULL_HANDLE,
     command_pool: c.vk.CommandPool = VK_NULL_HANDLE,
     main_command_buffer: c.vk.CommandBuffer = VK_NULL_HANDLE,
@@ -126,6 +125,7 @@ depth_format: c.vk.Format = undefined,
 upload_context: UploadContext = .{},
 
 frames: [FRAME_OVERLAP]FrameData = .{ FrameData{} } ** FRAME_OVERLAP,
+present_semaphores: std.ArrayList(c.vk.Semaphore) = undefined,
 
 camera_and_scene_set: c.vk.DescriptorSet = VK_NULL_HANDLE,
 camera_and_scene_buffer: AllocatedBuffer = undefined,
@@ -611,18 +611,34 @@ fn init_sync_structures(self: *Self) void {
         .flags = c.vk.FENCE_CREATE_SIGNALED_BIT,
     });
 
-    for (&self.frames) |*frame| {
-        check_vk(c.vk.CreateSemaphore(self.device, &semaphore_ci, vk_alloc_cbs, &frame.present_semaphore))
+    self.present_semaphores.ensureTotalCapacity(
+        self.allocator,
+        self.swapchain_images.len,
+    ) catch @panic("Out of memory");
+
+    for (0..self.swapchain_images.len) |_| {
+        var semaphore: c.vk.Semaphore = VK_NULL_HANDLE;
+        check_vk(c.vk.CreateSemaphore(self.device, &semaphore_ci, vk_alloc_cbs, &semaphore))
             catch @panic("Failed to create present semaphore");
+        self.present_semaphores.append(
+            self.allocator,
+            semaphore,
+        ) catch @panic("Out of memory");
+    }
+
+    for (self.present_semaphores.items) |sema| {
         self.deletion_queue.append(
             self.allocator,
-            VulkanDeleter.make(frame.present_semaphore, c.vk.DestroySemaphore),
+            VulkanDeleter.make(sema, c.vk.DestroySemaphore),
         ) catch @panic("Out of memory");
-        check_vk(c.vk.CreateSemaphore(self.device, &semaphore_ci, vk_alloc_cbs, &frame.render_semaphore))
+    }
+
+    for (&self.frames) |*frame| {
+        check_vk(c.vk.CreateSemaphore(self.device, &semaphore_ci, vk_alloc_cbs, &frame.swapchain_semaphore))
             catch @panic("Failed to create render semaphore");
         self.deletion_queue.append(
             self.allocator,
-            VulkanDeleter.make(frame.render_semaphore, c.vk.DestroySemaphore),
+            VulkanDeleter.make(frame.swapchain_semaphore, c.vk.DestroySemaphore),
         ) catch @panic("Out of memory");
 
         check_vk(c.vk.CreateFence(self.device, &fence_ci, vk_alloc_cbs, &frame.render_fence))
@@ -1415,6 +1431,7 @@ pub fn cleanup(self: *Self) void {
     }
     self.deletion_queue.deinit(self.allocator);
 
+    self.present_semaphores.deinit(self.allocator);
 
     self.allocator.free(self.framebuffers);
     self.allocator.free(self.swapchain_image_views);
@@ -1722,8 +1739,14 @@ fn draw(self: *Self) void {
         catch @panic("Failed to reset render fence");
 
     var swapchain_image_index: u32 = undefined;
-    check_vk(c.vk.AcquireNextImageKHR(self.device, self.swapchain, timeout, frame.present_semaphore, VK_NULL_HANDLE, &swapchain_image_index))
-        catch @panic("Failed to acquire swapchain image");
+    check_vk(c.vk.AcquireNextImageKHR(
+        self.device,
+        self.swapchain,
+        timeout,
+        frame.swapchain_semaphore,
+        VK_NULL_HANDLE,
+        &swapchain_image_index,
+    )) catch @panic("Failed to acquire swapchain image");
 
     var cmd = frame.main_command_buffer;
 
@@ -1784,25 +1807,25 @@ fn draw(self: *Self) void {
 
     const wait_stage = @as(u32, @intCast(c.vk.PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT));
     const submit_info = std.mem.zeroInit(c.vk.SubmitInfo, .{
-        .sType = c.vk.STRUCTURE_TYPE_SUBMIT_INFO,
-        .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &frame.present_semaphore,
-        .pWaitDstStageMask = &wait_stage,
-        .commandBufferCount = 1,
-        .pCommandBuffers = &cmd,
+        .sType                = c.vk.STRUCTURE_TYPE_SUBMIT_INFO,
+        .waitSemaphoreCount   = 1,
+        .pWaitSemaphores      = &frame.swapchain_semaphore,
+        .pWaitDstStageMask    = &wait_stage,
+        .commandBufferCount   = 1,
+        .pCommandBuffers      = &cmd,
         .signalSemaphoreCount = 1,
-        .pSignalSemaphores = &frame.render_semaphore,
+        .pSignalSemaphores    = &self.present_semaphores.items[swapchain_image_index],
     });
     check_vk(c.vk.QueueSubmit(self.graphics_queue, 1, &submit_info, frame.render_fence))
         catch @panic("Failed to submit to graphics queue");
 
     const present_info = std.mem.zeroInit(c.vk.PresentInfoKHR, .{
-        .sType = c.vk.STRUCTURE_TYPE_PRESENT_INFO_KHR,
+        .sType              = c.vk.STRUCTURE_TYPE_PRESENT_INFO_KHR,
         .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &frame.render_semaphore,
-        .swapchainCount = 1,
-        .pSwapchains = &self.swapchain,
-        .pImageIndices = &swapchain_image_index,
+        .pWaitSemaphores    = &self.present_semaphores.items[swapchain_image_index],
+        .swapchainCount     = 1,
+        .pSwapchains        = &self.swapchain,
+        .pImageIndices      = &swapchain_image_index,
     });
     check_vk(c.vk.QueuePresentKHR(self.present_queue, &present_info))
         catch @panic("Failed to present swapchain image");
